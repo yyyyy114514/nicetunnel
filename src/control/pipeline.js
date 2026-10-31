@@ -146,9 +146,13 @@ export async function buildSubscription(o) {
   const paidPool = settings.paid?.regionOnly === false ? [] : buildPaidRegionPool({ settings, accounts, snapshot: snapshot || emptySnapshot(now), now, mainHost: o.identity.host, checks });
   const regionPool = paidPool.length ? paidPool : freeRegionPool;
   const slotSpecs = specs.filter((s) => s.origin !== 'link');
+  // CF 优选节点走主站（preferred.random.onMain，与 edgetunnel 相同）：不参与按额度分配，直接用主站域名
+  const onMain = !!settings.preferred.random.onMain && !o.generatorMode;
+  const mainCarry = (settings.paid?.mainHosts?.[0]) || o.identity.host;
+  const isCfPreferred = (s) => (s.origin === 'random' || s.origin === 'best') && !s.chain;
   const isRegion = (s) => Array.isArray(s.tags) && s.tags.includes('region');
   const groupsOf = [
-    { pool, slots: slotSpecs.filter((s) => !isRegion(s)) },
+    { pool, slots: slotSpecs.filter((s) => !isRegion(s) && !(onMain && isCfPreferred(s))) },
     { pool: regionPool, slots: slotSpecs.filter(isRegion) },
   ];
   const hostOf = new Map();
@@ -168,6 +172,7 @@ export async function buildSubscription(o) {
     }
     g.slots.forEach((s, i) => hostOf.set(s, hs[i]));
   }
+  if (onMain) for (const s of slotSpecs) if (isCfPreferred(s)) hostOf.set(s, mainCarry);
   const hosts = slotSpecs.map((s) => hostOf.get(s));
   const hostShare = {};
   const fallbackHost = o.identity.host; // 没有任何可用节点域名时，用主站自己（主站同样跑数据面）

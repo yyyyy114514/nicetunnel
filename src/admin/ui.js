@@ -163,6 +163,7 @@ function clientMain() {
       ] },
       { t: "兜底节点（随机优选 CF IP）", act: [['testCidr', '测试 CIDR']], out: 'outCidr', f: [
         ['preferred.random.enabled', '启用', 'bool'],
+        ['preferred.random.onMain', 'CF 优选节点走主站域名（与 edgetunnel 相同）', 'bool', null, 0, '随机优选和优选订阅的节点不再按额度分到各节点账号，全部用主站域名承载。觉得分到节点账号后比原版 edgetunnel 慢、卡时可以打开对比；流量与测速都算在主站账号上'],
         ['preferred.random.aggregate', '只显示一个随机优选（节点只出现在测速组里，不在手动选择列表逐个列出）', 'bool', null, 0, '客户端里只看到一个"随机优选"自动选择组，由它自动挑最快的 CF IP。仅 Clash / Surge / sing-box 生效'],
         ['preferred.random.count', '数量', 'num'],
         ['preferred.random.goodRatio', '取自"已知可用地址"的比例（0~1，需启用优选订阅）', 'num', null, 0, '随机节点里这部分直接用优选订阅里的测速结果，其余从运营商 CIDR 抽取，减少超时 IP'],

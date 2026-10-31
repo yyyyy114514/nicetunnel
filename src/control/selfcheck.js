@@ -73,6 +73,7 @@ export function selfCheck({ settings: s, accounts = [], usage, host = '', now, k
   const tmin = Number(s.sub?.testIntervalMin) || 0;
   if (tmin >= 600) add('info', 'test-interval-slow', `测速间隔下限 ${tmin} 秒：所有测速组至少隔这么久才测一次，变慢或失效的节点要这么久才会被换掉，客户端表现为卡、慢。建议设为 0（按 INI，随机优选通常 300 秒），额度由"额度吃紧时自动放慢"保护。`);
   if (s.sub?.testIntervalAuto === false) add('info', 'test-interval-noguard', '"额度吃紧时自动放慢测速"已关闭：号池额度紧张时客户端仍按 INI 的间隔测速（每次 = 每个节点 1 次 Worker 请求）。');
+  if (s.preferred?.random?.onMain) add('info', 'cf-on-main', `CF 优选节点全部走主站域名（与 edgetunnel 相同）：这部分代理流量和客户端测速都算在主站账号上${s.paid?.main ? '（主号已开通 Workers Paid）' : '，免费版每天 10 万次，人多时容易用完；可考虑给主号开通 Workers Paid'}。`);
   if ((s.sub?.updateHours ?? 1) < 1) add('info', 'update-hours', `客户端更新间隔只有 ${s.sub.updateHours} 小时：用户很多时，订阅请求会快速占满主站的每日 10 万次额度。`);
 
   // 功能配置
