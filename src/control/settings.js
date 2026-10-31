@@ -81,8 +81,6 @@ export function defaultSettings() {
         // 只显示一个随机优选：CF 随机/优选 IP 节点只出现在测速组（INI 里匹配 CF 的 url-test 组）里，
         // 不在 🚀 节点选择 等手动选择列表里逐个列出。仅对 Clash / Surge / sing-box 生效（通用订阅没有分组）
         aggregate: true,
-        // CF 优选节点（随机优选 + 优选订阅）全部用主站域名承载，与 edgetunnel 的做法相同；关闭时按额度分到各节点账号的域名
-        onMain: false,
         goodRatio: 0.5, // 有优选订阅数据时，随机节点里取自"已知可用地址"的比例
         portBias: 0.5, // 随机端口倾向 443 的概率
         blacklist: [],
@@ -275,7 +273,6 @@ export function normalizeSettings(raw) {
   r.stable.windowMinutes = int(r.stable.windowMinutes, 60, 1, 10080);
   r.blacklist = strList(r.blacklist);
   r.aggregate = bool(r.aggregate, true);
-  r.onMain = bool(r.onMain, false);
   r.goodRatio = num(r.goodRatio, 0.5, 0, 1);
   r.portBias = num(r.portBias, 0.5, 0, 0.95);
   r.namePrefix = str(r.namePrefix, 'CF') || 'CF';

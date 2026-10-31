@@ -163,7 +163,6 @@ function clientMain() {
       ] },
       { t: "兜底节点（随机优选 CF IP）", act: [['testCidr', '测试 CIDR']], out: 'outCidr', f: [
         ['preferred.random.enabled', '启用', 'bool'],
-        ['preferred.random.onMain', 'CF 优选节点走主站域名（与 edgetunnel 相同）', 'bool', null, 0, '随机优选和优选订阅的节点不再按额度分到各节点账号，全部用主站域名承载。觉得分到节点账号后比原版 edgetunnel 慢、卡时可以打开对比；流量与测速都算在主站账号上'],
         ['preferred.random.aggregate', '只显示一个随机优选（节点只出现在测速组里，不在手动选择列表逐个列出）', 'bool', null, 0, '客户端里只看到一个"随机优选"自动选择组，由它自动挑最快的 CF IP。仅 Clash / Surge / sing-box 生效'],
         ['preferred.random.count', '数量', 'num'],
         ['preferred.random.goodRatio', '取自"已知可用地址"的比例（0~1，需启用优选订阅）', 'num', null, 0, '随机节点里这部分直接用优选订阅里的测速结果，其余从运营商 CIDR 抽取，减少超时 IP'],
@@ -319,13 +318,33 @@ function clientMain() {
     });
     return patch;
   }
+  // 「额度 → 主号额度」卡片里的输入（data-main）：有改动时返回要保存的完整账号列表，否则 null。与本页设置共用一个保存栏
+  const mainAccount = () => S.accounts.find((a) => a.role === 'main') || null;
+  function collectMain(root) {
+    const els = root.querySelectorAll('[data-main]');
+    if (!els.length) return null;
+    const v = (k) => ($(`[data-main="${k}"]`, root)?.value || '').trim();
+    const token = v('apiToken'), accountId = v('accountId');
+    const limitRaw = v('limit'), limit = limitRaw === '' ? null : Math.round(Number(limitRaw));
+    const m = mainAccount();
+    const oldLimit = m && Number(m.limit) > 0 ? Number(m.limit) : null;
+    if (!token && (!accountId || accountId === (m?.auth?.accountId || '')) && limit === oldLimit) return null;
+    const base = m || { id: 'main', name: '主站', hosts: [], role: 'main', enabled: true, weight: 1, auth: {} };
+    const next = { ...base, limit, auth: { ...base.auth, ...(token ? { apiToken: token } : {}), ...(accountId ? { accountId } : {}) } };
+    return m ? S.accounts.map((a) => (a === m ? next : a)) : S.accounts.concat([next]);
+  }
   async function saveSettings(root) {
     const patch = collectPatch(root);
-    if (!Object.keys(patch).length) return toast('没有改动');
-    const r = await api('settings', 'PUT', patch);
-    S.settings = r.settings;
-    document.body.classList.toggle('simple', !!S.settings.ui?.simpleMode);
-    toast('已保存'); render();
+    const mainList = collectMain(root);
+    if (!Object.keys(patch).length && !mainList) return toast('没有改动');
+    if (Object.keys(patch).length) {
+      const r = await api('settings', 'PUT', patch);
+      S.settings = r.settings;
+      document.body.classList.toggle('simple', !!S.settings.ui?.simpleMode);
+    }
+    if (mainList) { const r = await api('accounts', 'PUT', { accounts: mainList, mode: 'replace' }); S.accounts = r.accounts; }
+    toast('已保存'); dirty = false;
+    if (mainList) await reload(); else render();
   }
 
   // ---------------- 各页 ----------------
@@ -355,6 +374,7 @@ function clientMain() {
     return '<span class="pill p-ok">正常</span> <span class="mut">' + fmtN(u.used) + ' · ' + ago(u.polledAt) + '</span>';
   };
   const paidHost = (host) => S.accounts.some((a) => a.paid && (a.hosts || []).includes(host));
+  const mainLine = () => { const m = mainAccount(); const u = m ? S.usage?.accounts?.[m.id] : null; if (!m || !u?.polledAt) return '<br>主号（主站）用量：' + (m ? '还没轮询到' : '没有设置') + '，到「额度 → 主号额度」查看。'; const { limit } = mainLimitOf(m); return '<br>主号（主站）今日已用 ' + fmtN(u.used) + ' / ' + fmtN(limit) + '（' + Math.round((u.used / limit) * 100) + '%）· ' + ago(u.polledAt) + '更新。'; };
   function pgOverview() {
     const sm = S.pool?.summary || {}, hosts = (S.pool?.hosts || []).slice().sort((a, b) => a.host.localeCompare(b.host, 'en', { numeric: true }));
     const sub = S.subUrl || '';
@@ -368,7 +388,7 @@ function clientMain() {
         <div class="kpi"><b>${sm.accounts ?? 0}</b><span>参与分配的账号</span></div>
         <div class="kpi"><b><span style="color:var(--ok)">${sm.hostsOk ?? 0}</span> · <span style="color:var(--warn)">${sm.hostsLow ?? 0}</span> · <span style="color:var(--bad)">${sm.hostsExhausted ?? 0}</span></b><span>正常 · 偏低 · 耗尽</span></div>
         <div class="kpi"><b>${S.kv?.bound ? (S.kv.writesTodayEstimate ?? 0) + (S.settings.paid?.main ? ' / 每月 100 万' : ' / 1000') : '未绑定'}</b><span>KV 今日写入（本实例估计）</span></div>
-      </div></div><p class="mut" style="margin:14px 0 0">额度于 UTC 0 点（北京时间 8 点）重置${sm.resetAt ? '，下次 ' + fmtT(sm.resetAt) : ''}。</p></div>
+      </div></div><p class="mut" style="margin:14px 0 0">额度于 UTC 0 点（北京时间 8 点）重置${sm.resetAt ? '，下次 ' + fmtT(sm.resetAt) : ''}。${mainLine()}</p></div>
     <div class="card"><h2><i></i>订阅链接</h2>${sub ? links.map(([n, u]) => `<div class="f" style="margin-bottom:10px"><label>${h(n)}</label><div class="sub"><input readonly value="${h(u)}"><button class="btn" data-copy="${h(u)}">复制</button></div></div>`).join('') : '<p class="mut">未生成</p>'}
       <p class="mut" style="margin:6px 0 0">所有用户共用同一个链接即可：格式按客户端 UA 自适应，节点按访问者运营商与 IP 段自动分配。</p></div>
     <div class="card"><h2><i></i>节点站点（互联）</h2>
@@ -398,6 +418,7 @@ function clientMain() {
   const needAccId = (a) => { const u = S.usage?.accounts?.[a.id] || {}; return u.ok === false && /账户获取失败|未找到账户/.test(String(u.err || '')); };
   function pgAccounts() {
     const rows = S.accounts.map((a, i) => {
+      if (a.role === 'main') return ''; // 主号在「额度 → 主号额度」里设置
       const tags = (a.role === 'main' ? ' <span class="tag" title="旧版迁移的主站账号：只监控用量，不承载节点">主站</span>' : '');
       const accIdBox = needAccId(a) ? `<div style="margin-top:6px"><input data-k="accountId" value="${h(a.auth?.accountId || '')}" placeholder="自动获取失败：填 32 位 Account ID" style="min-width:220px"></div>` : '';
       return `<tr data-i="${i}">${accMulti ? `<td><input type="checkbox" data-pick="${i}" ${accPicked.has(i) ? 'checked' : ''}></td>` : ''}<td title="${h(a.auth?.accountId ? 'Account ID：' + a.auth.accountId : 'Account ID：首次轮询自动获取')}"><input data-k="name" value="${h(a.name)}" style="min-width:90px">${tags}</td>
@@ -410,7 +431,7 @@ function clientMain() {
         <td><button class="btn d" data-del="${i}">删除</button></td></tr>`;
     }).join('');
     const cols = accMulti ? 9 : 8;
-    const bar = accMulti ? `<div class="row" style="margin-bottom:10px;gap:8px"><label class="row" style="gap:6px;cursor:pointer"><input type="checkbox" id="pickAll" ${S.accounts.length && accPicked.size === S.accounts.length ? 'checked' : ''}>全选</label><span class="mut">已选 ${accPicked.size} 个</span><span class="sp"></span><button class="btn" id="bEnable">启用</button><button class="btn" id="bDisable">禁用</button><button class="btn" id="bPoll">轮询所选</button><button class="btn d" id="bDel">删除</button></div>` : '';
+    const bar = accMulti ? `<div class="row" style="margin-bottom:10px;gap:8px"><label class="row" style="gap:6px;cursor:pointer"><input type="checkbox" id="pickAll" ${S.accounts.some((a) => a.role !== 'main') && accPicked.size === S.accounts.filter((a) => a.role !== 'main').length ? 'checked' : ''}>全选</label><span class="mut">已选 ${accPicked.size} 个</span><span class="sp"></span><button class="btn" id="bEnable">启用</button><button class="btn" id="bDisable">禁用</button><button class="btn" id="bPoll">轮询所选</button><button class="btn d" id="bDel">删除</button></div>` : '';
     return `<div class="card"><h2><i></i>账号<span class="sp"></span><button class="btn" id="addAcc">添加</button><button class="btn${accMulti ? ' p' : ''}" id="multiAcc">${accMulti ? '退出多选' : '多选'}</button><button class="btn" id="pollAcc">轮询</button><button class="btn p" id="saveAcc">保存</button></h2>
       ${bar}<div class="tw"><table><thead><tr>${accMulti ? '<th></th>' : ''}<th>名称</th><th>节点域名（逗号分隔）</th><th>轮询状态</th><th>启用</th><th title="该账号开通了 Workers Paid">付费</th><th>权重</th><th>API Token</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="${cols}" class="mut">暂无账号</td></tr>`}</tbody></table></div>
       <p class="mut">每个账号默认都是节点账号：启用后它的域名参与节点分配，并监控用量；不启用 = 停用。API Token 需要「Account Analytics: Read」权限；Account ID 不用填，首次轮询会用 Token 自动获取并保存（换 Token 后会重新获取）。批量操作（启用 / 禁用 / 删除）立即生效，不需要再点保存。</p>
@@ -422,7 +443,37 @@ function clientMain() {
       <select id="impMode" style="width:auto"><option value="merge">合并</option><option value="replace">替换全部</option></select>
       <button class="btn" id="impDry">预览</button><button class="btn p" id="impGo">导入</button></div><div id="impOut"></div></div>`;
   }
-  function pgQuota() { return sectionHtml('quota'); }
+  // 主号：主站所在的 Cloudflare 账号（role=main，只监控用量，不承载节点）
+  const mainLimitOf = (m) => {
+    const dflt = S.settings.paid?.main ? (S.settings.paid?.dailyBudget || 330000) : (S.settings.usage?.limitPerAccount || 100000);
+    return { limit: m && Number(m.limit) > 0 ? Number(m.limit) : dflt, dflt };
+  };
+  function mainCard() {
+    const m = mainAccount();
+    const u = m ? (S.usage?.accounts?.[m.id] || {}) : {};
+    const paid = !!S.settings.paid?.main;
+    const { limit, dflt } = mainLimitOf(m);
+    const used = Number(u.used) || 0;
+    const known = !!u.polledAt;
+    const kpi = (v, label) => `<div class="kpi"><b>${v}</b><span>${label}</span></div>`;
+    const accIdBox = m && needAccId(m) ? `<div class="f"><label>Account ID（自动获取失败，请手动填 32 位 ID）</label><input data-main="accountId" value="${h(m.auth?.accountId || '')}"></div>` : '';
+    return `<section class="card"><h2><i></i>主号额度<span class="sp"></span><button class="btn" id="mainPoll">轮询主号</button></h2>
+      <p class="desc">主站所在的 Cloudflare 账号：全部订阅拉取、后台访问${paid ? '，以及走主站的地区条目' : ''}都算在它上面。填上 API Token 就能看到它今天用了多少；它只被监控，不参与节点分配。</p>
+      <div class="hero">${ring(used, limit)}<div class="kpis">
+        ${kpi(known ? fmtN(used) : '-', '今日已用')}
+        ${kpi(fmtN(limit), '每日额度' + (paid ? '（付费版预算）' : ''))}
+        ${kpi(known ? fmtN(Math.max(0, limit - used)) : '-', '剩余')}
+        ${kpi(u.rate ? Math.round(u.rate) + ' /分' : '-', '消耗速度')}
+        ${kpi(known ? fmtN(u.workers) + ' · ' + fmtN(u.pages) : '-', 'Workers · Pages')}
+      </div></div>
+      <p class="mut" style="margin:12px 0 14px">轮询状态：${m ? pollStatus(m) : '<span class="mut">还没设置主号</span>'}</p>
+      <div class="grid">
+        <div class="f"><label>API Token（需要 Account Analytics: Read）</label><input data-main="apiToken" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore placeholder="${m?.auth?.hasToken ? '已设置（留空保持）' : '未设置'}"></div>
+        <div class="f"><label>每日额度（留空 = ${paid ? '付费版预算' : '免费版'} ${fmtN(dflt)}）</label><input data-main="limit" type="number" step="1" value="${h(m && Number(m.limit) > 0 ? m.limit : '')}"></div>
+        ${accIdBox}
+      </div></section>`;
+  }
+  function pgQuota() { return mainCard() + sectionHtml('quota'); }
   function pgSources() {
     return sectionHtml('sources').replace('<div class="savebar"', `<section class="card"><h2><i></i>预览订阅<span class="sp"></span><button class="btn sm" id="pv">预览</button></h2><p class="desc">按本页当前填写的内容（包括还没保存的改动）生成一份订阅，看看会有哪些节点、分到哪些域名。</p><div id="pvOut" class="out"></div></section><div class="savebar"`);
   }
@@ -546,9 +597,9 @@ function clientMain() {
     const bar = $('#saveBar', root);
     if (bar) {
       const countLeaves = (o) => Object.values(o).reduce((n, v) => n + (v && typeof v === 'object' && !Array.isArray(v) ? countLeaves(v) : 1), 0);
-      const refresh = () => { const n = countLeaves(collectPatch(root)); dirty = n > 0; bar.hidden = !dirty; $('#dirtyN', root).textContent = '有 ' + n + ' 项改动未保存'; };
-      root.addEventListener('input', (e) => { if (e.target.closest('[data-p]')) refresh(); });
-      root.addEventListener('change', (e) => { if (e.target.closest('[data-p]')) refresh(); });
+      const refresh = () => { const n = countLeaves(collectPatch(root)) + (collectMain(root) ? 1 : 0); dirty = n > 0; bar.hidden = !dirty; $('#dirtyN', root).textContent = '有 ' + n + ' 项改动未保存'; };
+      root.addEventListener('input', (e) => { if (e.target.closest('[data-p], [data-main]')) refresh(); });
+      root.addEventListener('change', (e) => { if (e.target.closest('[data-p], [data-main]')) refresh(); });
       $('#undoSave', root).addEventListener('click', () => { dirty = false; render(); toast('已撤销改动'); });
     }
     root.querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', run(() => saveSettings(root))));
@@ -575,10 +626,11 @@ function clientMain() {
       await reload();
     };
     on('pollAcc', () => doPoll());
+    on('mainPoll', () => { const m = mainAccount(); if (!m || !(m.auth?.hasToken || m.auth?.hasKey)) return toast('先填主号的 API Token 并保存'); return doPoll([m.id]); });
     on('multiAcc', () => { S.accounts = readRows(); accMulti = !accMulti; accPicked.clear(); render(); });
     root.querySelectorAll('[data-pick]').forEach((c) => c.addEventListener('change', () => { const i = Number(c.dataset.pick); if (c.checked) accPicked.add(i); else accPicked.delete(i); S.accounts = readRows(); render(); }));
     const pickAll = $('#pickAll', root);
-    if (pickAll) pickAll.addEventListener('change', () => { S.accounts = readRows(); accPicked.clear(); if (pickAll.checked) S.accounts.forEach((_, i) => accPicked.add(i)); render(); });
+    if (pickAll) pickAll.addEventListener('change', () => { S.accounts = readRows(); accPicked.clear(); if (pickAll.checked) S.accounts.forEach((a, i) => { if (a.role !== 'main') accPicked.add(i); }); render(); });
     const needPick = () => { if (!accPicked.size) { toast('先勾选账号'); return false; } return true; };
     on('bEnable', () => needPick() && saveRows(readRows().map((a, i) => (accPicked.has(i) ? { ...a, enabled: true } : a)), '已启用 ' + accPicked.size + ' 个'));
     on('bDisable', () => needPick() && saveRows(readRows().map((a, i) => (accPicked.has(i) ? { ...a, enabled: false } : a)), '已禁用 ' + accPicked.size + ' 个'));

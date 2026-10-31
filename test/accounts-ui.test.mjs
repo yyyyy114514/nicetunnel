@@ -66,3 +66,16 @@ test('页内索引：卡片 ≥3 张时生成，吸顶（手机上贴在顶部�
   assert.ok(html.includes('.toc{position:sticky;top:var(--stick,0px)'));
   assert.ok(js.includes("setProperty('--stick'"), '手机上按顶部导航高度设置吸顶位置');
 });
+
+test('主号额度：额度页有主号卡片（与本页设置共用保存栏），账号表与全选不含主号，自检提示未填主号 Token', async () => {
+  assert.ok(js.includes('function pgQuota() { return mainCard() + sectionHtml(\'quota\'); }'));
+  assert.ok(js.includes('data-main="apiToken"') && js.includes('id="mainPoll"'));
+  assert.ok(js.includes("collectMain(root) ? 1 : 0"), '主号输入也计入改动、显示保存栏');
+  assert.ok(js.includes("if (a.role === 'main') return '';"), '账号表不显示主号');
+  assert.ok(js.includes("if (a.role !== 'main') accPicked.add(i);"), '全选不选中主号（批量删除不会删掉它）');
+  const { selfCheck } = await import('../src/control/selfcheck.js');
+  const { settingsWith } = await import('./helpers.mjs');
+  const ids = (accounts) => selfCheck({ settings: settingsWith({}), accounts, usage: null, host: 'm.com', now: 0, kvBound: true }).map((c) => c.id);
+  assert.ok(ids([]).includes('main-quota'));
+  assert.ok(!ids([{ id: 'main', role: 'main', enabled: true, hosts: [], auth: { apiToken: 'x'.repeat(40) } }]).includes('main-quota'));
+});

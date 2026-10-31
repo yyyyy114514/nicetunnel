@@ -96,7 +96,9 @@ npm run build -- --no-extras       # zip 里只放 _worker.js
 - **检测工具**：后台「检测工具」页显示 Cloudflare 看到的你的 IP / ASN / 运营商 / 接入点，以及订阅据此自适应的结果；还可检测 SOCKS5/HTTP/HTTPS/TURN/SSTP 代理和优选 URL 是否可用。
 - **订阅与规则**：填 INI 地址（默认是作者的 `subconfig2.ini`），点「获取并保存」把转换配置下载进 KV；之后订阅只读缓存，**不会再连远程**。规则模式 `expand`（规则直接写进配置）或 `provider`（客户端自己拉规则）。「自动更新转换配置」关掉后，只有再点「获取并保存」才会更新。
 
-### 后台演示站（只看交互，不需要任何账号）
+### 后台演示站（已不再维护）
+
+> 演示站只在当时的版本上做过，之后不再随后台更新；`npm run demo` 仍可生成，但页面可能与最新后台不一致。
 
 `npm run demo`（即 `node scripts/build-demo.mjs`）生成纯静态的演示站：`dist/demo/` 文件夹和 `dist/nicetunnel-demo.zip`。在 Cloudflare Pages 新建项目 → 直接上传这个文件夹或 zip 即可，不需要环境变量、不需要 KV。
 

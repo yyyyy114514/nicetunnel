@@ -170,5 +170,20 @@
     "label": "SSTP 建连提速：使用预先开始的目标解析",
     "search": "\t\t\tconst records = await DoH查询(target, 'A');",
     "replace": "\t\t\tconst records = await (预解析目标 || DoH查询(target, 'A')); // [NT-HOOK]"
+  },
+  {
+    "label": "反代兜底：健康记录与\"连上却不回话\"检测（函数）",
+    "search": "async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com', UUID = '00000000-0000-4000-8000-000000000000') {",
+    "replace": "// [NT-HOOK] 反代健康：本 isolate 内记录反代候选的成败。上游按\"目标站点 + UUID\"固定候选顺序（同一站点总用同一个出口，登录态稳定），\n// 但排在前面的反代坏掉时，这个站点每次都会超时（其它站点正常）。这里只把近期失败的候选挪到最后，健康的仍保持原顺序。\nconst 反代健康 = new Map();\nconst 反代失败冷却毫秒 = 5 * 60 * 1000;\nfunction 记录反代结果(地址, 端口, 成功) {\n\tconst 键 = String(地址).toLowerCase() + ':' + 端口;\n\tif (成功) { 反代健康.delete(键); return; }\n\tif (反代健康.size > 512) 反代健康.clear();\n\t反代健康.set(键, Date.now());\n}\nfunction 反代近期失败(地址, 端口) {\n\tconst t = 反代健康.get(String(地址).toLowerCase() + ':' + 端口);\n\treturn !!t && Date.now() - t < 反代失败冷却毫秒;\n}\n// [NT-HOOK] 首包完整（一整条 TLS 记录或完整的 HTTP 请求头）时，等反代送回第一段回应再交给客户端；\n// 反代连上却不回话（坏掉的公共反代常见）就换下一个候选。首包不完整时不等，避免需要更多客户端数据的连接被卡住。\nconst 反代首包超时毫秒 = 4000;\nfunction 首包可等待(数据) {\n\tconst b = 数据 ? 数据转Uint8Array(数据) : null;\n\tif (!b || b.byteLength < 5) return false;\n\tif (b[0] === 0x16 && b[1] === 0x03) return b.byteLength >= 5 + ((b[3] << 8) | b[4]);\n\tif (/^(GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH) /.test(String.fromCharCode(...b.subarray(0, 8)))) return textDecoder.decode(b).includes('\\r\\n\\r\\n');\n\treturn false;\n}\nasync function 等待反代首包(socket, 超时毫秒) {\n\tconst reader = socket.readable.getReader();\n\tlet 定时器 = null;\n\ttry {\n\t\tconst 首 = await Promise.race([reader.read(), new Promise((_, reject) => { 定时器 = setTimeout(() => reject(new Error('反代已连接但 ' + 超时毫秒 + 'ms 内没有回应')), 超时毫秒) })]);\n\t\tif (首.done || !首.value) throw new Error('反代连接后立即关闭');\n\t\tconst readable = new ReadableStream({\n\t\t\tstart(c) { c.enqueue(首.value) },\n\t\t\tasync pull(c) { const { value, done } = await reader.read(); if (done) c.close(); else c.enqueue(value) },\n\t\t\tcancel(r) { return reader.cancel(r) }\n\t\t});\n\t\treturn new Proxy(socket, { get(t, k) { if (k === 'readable') return readable; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v } });\n\t} catch (e) {\n\t\ttry { reader.releaseLock() } catch (_) { }\n\t\tthrow e;\n\t} finally { clearTimeout(定时器) }\n}\n\nasync function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com', UUID = '00000000-0000-4000-8000-000000000000') {"
+  },
+  {
+    "label": "反代兜底：近期失败的候选排到最后（健康的保持原顺序）",
+    "search": "\t\tif (所有反代数组 && 所有反代数组.length > 0) {\n\t\t\tconst 实际并发数 = Math.max(1, Math.floor(Number(反代并发拨号数) || 1));",
+    "replace": "\t\tif (所有反代数组 && 所有反代数组.length > 0) {\n\t\t\t所有反代数组 = 所有反代数组.filter(([a, p]) => !反代近期失败(a, p)).concat(所有反代数组.filter(([a, p]) => 反代近期失败(a, p))); // [NT-HOOK]\n\t\t\tconst 实际并发数 = Math.max(1, Math.floor(Number(反代并发拨号数) || 1));"
+  },
+  {
+    "label": "反代兜底：等第一段回应、记录成败，失败换下一个候选",
+    "search": "\t\t\t\t\tawait 写入首包(socket, data);\n\t\t\t\t\tlog(`[反代连接] 成功连接到: ${candidate.hostname}:${candidate.port} (索引: ${candidate.index})`);\n\t\t\t\t\t反代数组索引 = candidate.index;\n\t\t\t\t\treturn socket;\n\t\t\t\t} catch (err) {\n\t\t\t\t\ttry { socket?.close?.() } catch (e) { }",
+    "replace": "\t\t\t\t\tawait 写入首包(socket, data);\n\t\t\t\t\tif (首包可等待(data)) socket = await 等待反代首包(socket, 反代首包超时毫秒); // [NT-HOOK]\n\t\t\t\t\t记录反代结果(candidate.hostname, candidate.port, true); // [NT-HOOK]\n\t\t\t\t\tlog(`[反代连接] 成功连接到: ${candidate.hostname}:${candidate.port} (索引: ${candidate.index})`);\n\t\t\t\t\t反代数组索引 = candidate.index;\n\t\t\t\t\treturn socket;\n\t\t\t\t} catch (err) {\n\t\t\t\t\tfor (const c of (candidate ? [candidate] : 候选列表)) 记录反代结果(c.hostname, c.port, false); // [NT-HOOK]\n\t\t\t\t\ttry { socket?.close?.() } catch (e) { }"
   }
 ]

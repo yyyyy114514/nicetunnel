@@ -56,6 +56,9 @@ export function selfCheck({ settings: s, accounts = [], usage, host = '', now, k
   // 账号与用量
   const noCred = node.filter((a) => !hasCred(a));
   if (noCred.length) add('info', 'no-cred', `${noCred.length} 个节点账号没有填 API 凭据，额度未知，只能按固定权重参与分配（${noCred.slice(0, 3).map((a) => a.name || a.id).join('、')}${noCred.length > 3 ? ' 等' : ''}）。`);
+  // 主号（主站所在账号）：没有凭据就看不到主站自己的用量（订阅、后台请求都算在它上面）
+  const mainAcc = accounts.find((a) => a.role === 'main');
+  if (!mainAcc || !hasCred(mainAcc)) add('info', 'main-quota', '还没填主号（主站所在的 Cloudflare 账号）的 API Token：看不到主站自己今天用了多少。到「额度 → 主号额度」填上即可。');
   const u = usage?.accounts || {};
   const failing = node.filter((a) => hasCred(a) && u[a.id] && u[a.id].ok === false);
   if (failing.length) add('warn', 'poll-fail', `${failing.length} 个账号最近一次轮询失败（${failing.slice(0, 3).map((a) => `${a.name || a.id}：${u[a.id].err || '未知错误'}`).join('；')}）。请检查 API Token 权限（需要 Account Analytics: Read）。`);
@@ -73,7 +76,6 @@ export function selfCheck({ settings: s, accounts = [], usage, host = '', now, k
   const tmin = Number(s.sub?.testIntervalMin) || 0;
   if (tmin >= 600) add('info', 'test-interval-slow', `测速间隔下限 ${tmin} 秒：所有测速组至少隔这么久才测一次，变慢或失效的节点要这么久才会被换掉，客户端表现为卡、慢。建议设为 0（按 INI，随机优选通常 300 秒），额度由"额度吃紧时自动放慢"保护。`);
   if (s.sub?.testIntervalAuto === false) add('info', 'test-interval-noguard', '"额度吃紧时自动放慢测速"已关闭：号池额度紧张时客户端仍按 INI 的间隔测速（每次 = 每个节点 1 次 Worker 请求）。');
-  if (s.preferred?.random?.onMain) add('info', 'cf-on-main', `CF 优选节点全部走主站域名（与 edgetunnel 相同）：这部分代理流量和客户端测速都算在主站账号上${s.paid?.main ? '（主号已开通 Workers Paid）' : '，免费版每天 10 万次，人多时容易用完；可考虑给主号开通 Workers Paid'}。`);
   if ((s.sub?.updateHours ?? 1) < 1) add('info', 'update-hours', `客户端更新间隔只有 ${s.sub.updateHours} 小时：用户很多时，订阅请求会快速占满主站的每日 10 万次额度。`);
 
   // 功能配置
