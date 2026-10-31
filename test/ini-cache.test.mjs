@@ -6,7 +6,7 @@ import { createStore, resetStoreState } from '../src/control/store.js';
 import { resetPipelineState } from '../src/control/pipeline.js';
 import { fetchAndSaveIni, loadRules, refreshRulesStep, getRulesStatus, resetRulesState, RULES_KEYS } from '../src/control/rulesfeed.js';
 import { deriveIdentity, authCookieValue } from '../src/control/identity.js';
-import { memKV, fakeFetch, settingsWith } from './helpers.mjs';
+import { memKV, fakeFetch, settingsWith, TEST_AUTH_KEY } from './helpers.mjs';
 
 const realFetch = globalThis.fetch;
 beforeEach(() => { resetStoreState(); resetPipelineState(); resetRulesState(); });
@@ -69,7 +69,7 @@ test('后台接口 POST /admin/api/rules/ini/fetch：获取、保存并重建规
   const env = { KV: kv, ...ADMIN };
   const id = deriveIdentity(env, 'vp.example.com');
   globalThis.fetch = fakeFetch({ [URL1]: INI, 'https://r.test/x.list': 'DOMAIN-SUFFIX,cn' });
-  const h = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id), 'X-Requested-With': 'nt', 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' };
+  const h = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id, { secret: TEST_AUTH_KEY }), 'X-Requested-With': 'nt', 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' };
   const call = (path, body) => worker.fetch(new Request('https://vp.example.com/admin/api/' + path, { method: 'POST', headers: h, body: JSON.stringify(body || {}) }), env, { waitUntil() {} });
   const res = await (await call('rules/ini/fetch')).json();
   assert.equal(res.ok, true, JSON.stringify(res));

@@ -13,7 +13,7 @@ test('identity：UUID 与订阅 token 与上游算法一致', () => {
   // HOST 环境变量优先于请求域名
   const id2 = deriveIdentity({ ADMIN: 'x', UUID, HOST: 'https://VP.example.org/abc, other.com' }, 'whatever.dev');
   assert.equal(id2.subToken, 'fa8a47f9c50e5aa620932c6e53fb3981');
-  assert.equal(authCookieValue('UA', id), md5md5('UA' + id.secretKey + 'x'));
+  assert.match(authCookieValue("UA", id), /^[0-9]{10}[.][0-9a-f]{32}$/);
 });
 
 test('identity：无 UUID 时由 ADMIN+KEY 推导为合法 v4', () => {

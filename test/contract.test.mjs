@@ -9,7 +9,7 @@ import { base64SecretEncode, base64SecretDecode } from '../src/dataplane/edt-cor
 import { deriveIdentity, authCookieValue } from '../src/control/identity.js';
 import { resetStoreState } from '../src/control/store.js';
 import { adminHtml } from '../src/admin/ui.js';
-import { memKV, fakeFetch, UUID } from './helpers.mjs';
+import { memKV, fakeFetch, UUID, TEST_AUTH_KEY } from './helpers.mjs';
 
 const realFetch = globalThis.fetch;
 beforeEach(() => { resetPoolRouteState(); resetStoreState(); });
@@ -66,7 +66,7 @@ test('后台：状态接口带出数据面版本；概览有 UUID 速查；账�
   const env = { KV: kv, ADMIN: 'pw', KEY: 'k', UUID };
   const id = deriveIdentity(env, 'vp.example.com');
   globalThis.fetch = fakeFetch({});
-  const h = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id), 'User-Agent': 'Mozilla/5.0', 'X-Requested-With': 'nt' };
+  const h = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id, { secret: TEST_AUTH_KEY }), 'User-Agent': 'Mozilla/5.0', 'X-Requested-With': 'nt' };
   const st = await (await worker.fetch(new Request('https://vp.example.com/admin/api/state', { headers: h }), env, { waitUntil() {} })).json();
   assert.equal(st.dataplane.version, DATAPLANE_VERSION);
   assert.deepEqual(st.dataplane.caps, [...CAPS]);

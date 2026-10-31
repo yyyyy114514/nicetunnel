@@ -115,7 +115,7 @@ npm run build -- --no-extras       # zip 里只放 _worker.js
 
 | 变量 | 说明 |
 |---|---|
-| `ADMIN` | 后台密码（只有主站需要）。节点站点不需要：管理员密码缺省时会回退取 `UUID` |
+| `ADMIN` | 后台密码（只有主站需要，**必须设置**）。主站没设 `ADMIN` 时后台不开放（不会像 edgetunnel 那样回退成 `UUID` / `KEY`——它们写在订阅里，会被拿来登录后台、导出所有 CF Token）；订阅照常可用。节点站点不需要 |
 | `UUID` | 固定 UUID，所有站点一致 |
 | `KEY` | 快速订阅路径 `/<KEY>`；也参与 UUID/cookie 推导 |
 | `HOST` | 订阅 token 绑定的域名（多个取第一个） |

@@ -305,6 +305,13 @@ export async function fetchRemoteSource(el, { fetchFn, uuid = '', timeoutMs = FE
 // ---------------------------------------------------------------------------
 const inflightByCache = new WeakMap();
 const cacheKey = (el) => 'nt.src|' + el;
+// 缓存条数上限：超过时淘汰最早写入的（Map 按插入顺序；写入前先删再插，保持"最近写入在后"）
+export const SOURCE_CACHE_MAX = 64;
+function cachePut(cache, key, val) {
+  cache.delete(key);
+  cache.set(key, val);
+  while (cache.size > SOURCE_CACHE_MAX) cache.delete(cache.keys().next().value);
+}
 
 function inflightMap(cache) {
   let m = inflightByCache.get(cache);
@@ -323,12 +330,12 @@ function refreshSource(el, { cache, fetchFn, now, uuid }) {
       const r = await fetchRemoteSource(el, { fetchFn, uuid });
       if (!r.entries.length && !r.links.length) throw new Error('来源返回 0 条可用节点');
       const val = { entries: r.entries, links: r.links, fetchedAt: now, checkedAt: now, error: null };
-      cache.set(key, val);
+      cachePut(cache, key, val);
       return val;
     } catch (err) {
       const msg = String(err?.message || err);
       // 有旧值则保留（是否仍可用由 loadCustomEntries 按 24h 判断）；无旧值则写一条负缓存
-      cache.set(key, prev ? { ...prev, checkedAt: now, error: msg } : { entries: [], links: [], fetchedAt: 0, checkedAt: now, error: msg });
+      cachePut(cache, key, prev ? { ...prev, checkedAt: now, error: msg } : { entries: [], links: [], fetchedAt: 0, checkedAt: now, error: msg });
       return { error: msg };
     } finally {
       inflight.delete(key);

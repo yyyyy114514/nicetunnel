@@ -1,9 +1,8 @@
 // 后台鉴权：登录 / 退出 / cookie 校验 / 登录失败节流 / CSRF 头校验。
-// cookie 名称与取值算法与上游 cmliu/edgetunnel 完全一致（_worker.js 91–111、300–303 行）：
-//   auth = md5md5(UA + 加密秘钥 + 管理员密码)，UA 缺失时为字符串 'null'。
+// cookie 名称与上游 cmliu/edgetunnel 相同；取值改为 <过期秒>.<签名>（见 identity.js authCookieValue）：服务端校验过期，
+// 签名密钥是 KV 里随机生成的 nt.authkey（ctx.authSecret），泄露的 cookie 24 小时后失效，也无法拿来离线破解密码。
 // 在上游基础上新增（见 docs/API.md §1）：登录失败节流、变更类请求的 X-Requested-With 头校验、未设密码时拒绝。
-import { md5md5 } from '../lib/md5.js';
-import { UUID_RE } from './identity.js';
+import { UUID_RE, AUTH_TTL_SEC, signAuth, authCookieValue, fallbackAuthSecret } from './identity.js';
 import { trackRequest } from './logs.js';
 
 export const AUTH_COOKIE = 'auth';
@@ -60,9 +59,16 @@ export function identityOf(ctx) {
   };
 }
 
-/** 期望的 cookie 值：md5md5(UA + secretKey + adminPassword) */
-export function expectedAuthCookie(ua, secretKey, adminPassword) {
-  return md5md5(ua + secretKey + adminPassword);
+/** 签名密钥：路由层从 KV 读到的随机值；没有时退回由 KEY+ADMIN 推导 */
+const authSecretOf = (ctx, id) => ctx.authSecret || fallbackAuthSecret(id);
+
+/** 校验 cookie：格式、未过期、签名（常量时间比较） */
+export function verifyAuthCookie(value, ua, identity, secret, now) {
+  const m = /^([0-9]{9,11})[.]([0-9a-f]{32})$/.exec(String(value || ''));
+  if (!m) return false;
+  const exp = Number(m[1]), t = Math.floor(now / 1000);
+  if (exp <= t || exp > t + AUTH_TTL_SEC + 300) return false;
+  return safeEqual(m[2], signAuth(ua, identity, secret, exp));
 }
 
 /** 构造登录成功的 Set-Cookie（与上游 102 行逐字一致） */
@@ -72,12 +78,12 @@ export function authSetCookie(value) {
 /** 清除 cookie（与上游 302 行逐字一致） */
 export const CLEAR_AUTH_COOKIE = `${AUTH_COOKIE}=; Path=/; Max-Age=0; HttpOnly`;
 
-/** 是否已登录（cookie 与 UA+KEY+ADMIN 匹配） */
+/** 是否已登录（cookie 签名有效且未过期） */
 export function isAuthed(ctx) {
-  const { secretKey, adminPassword } = identityOf(ctx);
-  if (!adminPassword) return false;
+  const id = identityOf(ctx);
+  if (!id.adminPassword) return false;
   const v = readCookie(ctx.request);
-  return !!v && v === expectedAuthCookie(requestUa(ctx.request), secretKey, adminPassword);
+  return !!v && verifyAuthCookie(v, requestUa(ctx.request), id, authSecretOf(ctx, id), ctx.now ?? Date.now());
 }
 
 /** 上游语义：访问路径为 `logout` 或任意 UUID 时清 cookie 跳 /login（_worker.js 300 行）。path 不含前导 '/' */
@@ -232,13 +238,13 @@ const textPage = (body, status = 200) => new Response(body, { status, headers: {
  */
 export async function handleLogin(ctx, opts = {}) {
   const { request } = ctx;
-  const { secretKey, adminPassword } = identityOf(ctx);
+  const id = identityOf(ctx);
+  const { adminPassword } = id;
   if (!adminPassword) return noAdminResponse(request.method === 'POST' && wantsJson(request));
   const ua = requestUa(request);
-  const cookieValue = expectedAuthCookie(ua, secretKey, adminPassword);
   // 已登录访问 /login → 302 /admin（上游 94 行）
   if (request.method !== 'POST') {
-    if (readCookie(request) === cookieValue) return redirect('/admin');
+    if (isAuthed(ctx)) return redirect('/admin');
     return textPage(opts.loginHtml ? opts.loginHtml() : '<!doctype html><meta charset="utf-8"><title>登录</title><form method="post"><input type="password" name="password" autofocus><button>登录</button></form>');
   }
 
@@ -254,9 +260,9 @@ export async function handleLogin(ctx, opts = {}) {
 
   const input = await readPassword(request);
   // 上游比较时去掉密码里的换行（99 行），cookie 计算仍用原值
-  if (input && input === String(adminPassword).replace(/[\r\n]/g, '')) {
+  if (input && safeEqual(input, String(adminPassword).replace(/[\r\n]/g, ''))) {
     throttle.reset(ip);
-    const setCookie = authSetCookie(cookieValue);
+    const setCookie = authSetCookie(authCookieValue(ua, id, { secret: authSecretOf(ctx, id), now }));
     const hook = opts.onLogin ? opts.onLogin(ctx) : defaultOnLogin(ctx);
     if (hook && typeof hook.then === 'function') {
       if (ctx.executionCtx?.waitUntil) ctx.executionCtx.waitUntil(hook.catch(() => {}));

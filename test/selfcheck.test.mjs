@@ -7,7 +7,7 @@ import { resetStoreState } from '../src/control/store.js';
 import { resetPipelineState } from '../src/control/pipeline.js';
 import { deriveIdentity, authCookieValue } from '../src/control/identity.js';
 import { adminHtml } from '../src/admin/ui.js';
-import { memKV, fakeFetch, settingsWith } from './helpers.mjs';
+import { memKV, fakeFetch, settingsWith, TEST_AUTH_KEY } from './helpers.mjs';
 
 const realFetch = globalThis.fetch;
 beforeEach(() => { resetStoreState(); resetPipelineState(); });
@@ -66,7 +66,7 @@ test('端到端：状态接口带出 checks；后台页面含自检卡片代码�
   const env = { KV: kv, ADMIN: 'pw', KEY: 'k' };
   const id = deriveIdentity(env, 'vp.example.com');
   globalThis.fetch = fakeFetch({});
-  const h = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id), 'User-Agent': 'Mozilla/5.0', 'X-Requested-With': 'nt' };
+  const h = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id, { secret: TEST_AUTH_KEY }), 'User-Agent': 'Mozilla/5.0', 'X-Requested-With': 'nt' };
   const st = await (await worker.fetch(new Request('https://vp.example.com/admin/api/state', { headers: h }), env, { waitUntil() {} })).json();
   assert.ok(Array.isArray(st.checks));
   assert.ok(st.checks.some((c) => c.id === 'main-in-pool' && c.level === 'warn'));

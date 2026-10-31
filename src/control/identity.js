@@ -9,8 +9,17 @@ export function splitEnvList(text) {
   return String(text || '').replace(/[\t"'\r\n]+/g, ',').replace(/,+/g, ',').replace(/^,|,$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+/** 推导 UUID 用的"密码"（与上游一致，会回退到 TOKEN / KEY / UUID）。不要拿它当后台登录密码 */
 export function adminPasswordOf(env) {
   return env.ADMIN || env.admin || env.PASSWORD || env.password || env.pswd || env.TOKEN || env.KEY || env.UUID || env.uuid || '';
+}
+
+/**
+ * 后台登录密码：只认 ADMIN 一类变量。上游没配 ADMIN 时会回退到 UUID / KEY，而 UUID 写在每条分享链接里、
+ * KEY 是快速订阅路径——拿到订阅的人就能登录后台、导出所有 CF Token。主站存着多个账号的凭据，必须显式设置 ADMIN。
+ */
+export function adminLoginOf(env) {
+  return env.ADMIN || env.admin || env.PASSWORD || env.password || env.pswd || '';
 }
 
 /**
@@ -32,6 +41,7 @@ export function deriveIdentity(env, requestHostname) {
   const host = hosts[0];
   return {
     adminPassword, secretKey, uuid, host,
+    adminLogin: adminLoginOf(env),
     // UUID 来源：env=环境变量（合法 v4）；derived=由 ADMIN+KEY 推导。设置了 UUID 但格式不是标准 v4 时会被忽略（与 edgetunnel 一致），envUuidInvalid=true
     uuidSource: envUuidValid ? 'env' : 'derived', envUuidInvalid: !!envUUID && !envUuidValid,
     subToken: md5md5(host + uuid),
@@ -39,5 +49,17 @@ export function deriveIdentity(env, requestHostname) {
   };
 }
 
-/** 后台 cookie 值（与上游一致，绑定 UA） */
-export const authCookieValue = (ua, identity) => md5md5(ua + identity.secretKey + identity.adminPassword);
+// ---- 后台 cookie：<过期时间(秒)>.<签名> ----
+// 上游的 cookie 是固定值 md5md5(UA+KEY+ADMIN)：服务端不查过期，泄露一次就一直能用；没设 KEY 时还能拿它离线暴力破解密码。
+// 这里改成带过期时间的签名，签名密钥是 KV 里随机生成的 nt.authkey（没有 KV 时退回由 KEY+ADMIN 推导）。
+export const AUTH_TTL_SEC = 86400;
+export const fallbackAuthSecret = (identity) => md5md5('nt-auth\n' + identity.secretKey + '\n' + loginPw(identity));
+const loginPw = (identity) => identity.adminLogin ?? identity.adminPassword ?? '';
+export function signAuth(ua, identity, secret, exp) {
+  return md5md5([secret, ua, exp, identity.secretKey, loginPw(identity)].join('\n'));
+}
+/** 生成 cookie 值 */
+export function authCookieValue(ua, identity, { secret = fallbackAuthSecret(identity), now = Date.now() } = {}) {
+  const exp = Math.floor(now / 1000) + AUTH_TTL_SEC;
+  return exp + '.' + signAuth(ua, identity, secret, exp);
+}

@@ -10,6 +10,7 @@ export const KEYS = {
   log: 'nt.log',
   meta: 'nt.meta',
   hostChecks: 'nt.hostchecks', // 后台"检测节点"的结果（用于分配时排除坏节点）
+  authKey: 'nt.authkey', // 后台 cookie 签名密钥（随机生成）
   legacyConfig: 'config.json',
   legacyTg: 'tg.json',
   legacyCf: 'cf.json',
@@ -48,8 +49,9 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
   async function rawGet(key, type) {
     if (!kvBound) return null;
     try { return await kv.get(key, type === 'json' ? { type: 'json' } : undefined); } catch (e) {
-      // JSON 损坏时按文本读出并丢弃，避免整个站点不可用
-      if (type === 'json') return null;
+      // 只有 JSON 损坏才当作"没有"（避免整个站点不可用）；KV 本身出错（503、超时等）必须抛出，
+      // 否则调用方会把它当成"首次运行"，用默认值覆盖已有数据
+      if (type === 'json' && e instanceof SyntaxError) return null;
       throw e;
     }
   }
@@ -64,7 +66,12 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
     const hit = memo.get(key);
     const t = now();
     if (hit && hit.exp > t) return hit.v;
-    const v = await loader();
+    let v;
+    try { v = await loader(); } catch (e) {
+      // KV 暂时读不到：有旧缓存就先用旧的（10 秒后再试），没有才报错
+      if (hit) { memo.set(key, { v: hit.v, exp: t + 10e3 }); return hit.v; }
+      throw e;
+    }
     memo.set(key, { v, exp: t + ttlMs });
     return v;
   }
@@ -77,9 +84,13 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
 
   // ---------------- settings（含首次迁移） ----------------
   async function loadSettings() {
-    const raw = await rawGet(KEYS.settings, 'json');
-    if (raw) return normalizeSettings(raw);
     if (!kvBound) return defaultSettings();
+    // 读失败直接抛出（不写 KV）；内容损坏时本次用默认值但不写回；只有键确实不存在才算首次运行
+    const raw = await kv.get(KEYS.settings);
+    if (raw != null) {
+      if (typeof raw === 'object') return normalizeSettings(raw);
+      try { return normalizeSettings(JSON.parse(raw)); } catch { return defaultSettings(); }
+    }
     // 首次运行：尝试从 edgetunnel 旧配置迁移（只读旧键，不删除）
     const [legacy, tg, addTxt] = await Promise.all([
       rawGet(KEYS.legacyConfig, 'json'), rawGet(KEYS.legacyTg, 'json'), rawGet(KEYS.legacyAdd, 'text'),
@@ -173,12 +184,28 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
   }
   async function clearLogs() { state.logBuf.length = 0; await putJson(KEYS.log, [], TTL.log); }
 
+  // ---------------- 后台 cookie 签名密钥（随机生成一次，存 KV） ----------------
+  async function loadAuthSecret() {
+    const v = await kv.get(KEYS.authKey);
+    if (typeof v === 'string' && /^[0-9a-f]{32,}$/.test(v)) return v;
+    const b = crypto.getRandomValues(new Uint8Array(32));
+    const s = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    await rawPut(KEYS.authKey, s);
+    return s;
+  }
+  /** 没绑定 KV 或读写失败时返回 ''（调用方退回推导的密钥） */
+  async function getAuthSecret() {
+    if (!kvBound) return '';
+    try { return await cached(KEYS.authKey, 3600e3, loadAuthSecret); } catch { return ''; }
+  }
+
   return {
     kvBound,
     getSettings, saveSettings,
     getAccounts, saveAccounts,
     getUsage, saveUsage, getPersistedUsage,
     getLogs, appendLog, flushLogs, clearLogs,
+    getAuthSecret,
     getJson, putJson, getText, putText,
     writesToday: () => (state.day === utcDay(now()) ? state.writes : 0),
     invalidate: (key) => (key ? memo.delete(key) : memo.clear()),

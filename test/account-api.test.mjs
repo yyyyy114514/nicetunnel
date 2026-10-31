@@ -6,7 +6,7 @@ import { resetStoreState } from '../src/control/store.js';
 import { resetPipelineState } from '../src/control/pipeline.js';
 import { deriveIdentity, authCookieValue } from '../src/control/identity.js';
 import { defaultLoginThrottle } from '../src/control/auth.js';
-import { memKV } from './helpers.mjs';
+import { memKV, TEST_AUTH_KEY } from './helpers.mjs';
 
 const realFetch = globalThis.fetch;
 beforeEach(() => { resetStoreState(); resetPipelineState(); });
@@ -40,7 +40,7 @@ test('Bearer 鉴权：正确密码可用且不需要 CSRF 头；没带/错误都
   assert.equal((await call('GET', 'accounts', undefined, { Authorization: 'Basic ' + PW })).status, 401, '只认 Bearer');
   // cookie 登录的变更请求仍然必须带 CSRF 头
   const id = deriveIdentity(env, 'vp.example.com');
-  const cookie = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id), 'User-Agent': 'Mozilla/5.0' };
+  const cookie = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id, { secret: TEST_AUTH_KEY }), 'User-Agent': 'Mozilla/5.0' };
   assert.equal((await call('POST', 'accounts/upsert', { accounts: [{ host: 'b.example.com' }] }, cookie)).status, 403);
   assert.equal((await call('POST', 'accounts/upsert', { accounts: [{ host: 'b.example.com' }] }, { ...cookie, 'X-Requested-With': 'nt' })).status, 200);
 });
@@ -94,7 +94,7 @@ test('upsert：参数校验', async () => {
   assert.equal((await call('POST', 'accounts/upsert', { accounts: [{ host: 'ok.example.com' }] }, { ...bearer, 'Content-Type': 'application/json' })).status, 200);
 });
 
-test('upsert + poll:true：保存后立刻验证令牌，失败原因不含令牌；5 秒内重复 poll 被限频', async () => {
+test('upsert + poll:true：保存后立刻验证令牌，失败原因不含令牌；5 秒内重复 poll 只保存不轮询（不报 429）', async () => {
   const { call, bearer } = setup();
   globalThis.fetch = async (url, init) => {
     const auth = String(init?.headers?.Authorization || '');
@@ -115,7 +115,11 @@ test('upsert + poll:true：保存后立刻验证令牌，失败原因不含令�
   assert.equal(by['bad.example.com'].kind, 'auth');
   assert.equal(JSON.stringify(r).includes('TOKEN'), false);
   const again = await call('POST', 'accounts/upsert', { accounts: [{ host: 'x.example.com' }], poll: true }, bearer);
-  assert.equal(again.status, 429);
+  // 账号已经保存：返回 200 + pollSkipped，而不是 429（否则脚本以为保存失败）
+  assert.equal(again.status, 200);
+  const aj = await again.json();
+  assert.equal(aj.ok, true);
+  assert.ok(aj.pollSkipped && !aj.polled);
 });
 
 test('delete：按 host 或 id 删除；参数为空 400；幂等', async () => {

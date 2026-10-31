@@ -11,7 +11,7 @@ import * as bestMod from './bestfeed.js';
 import * as regionsMod from './regions.js';
 import { detectIsp } from '../lib/isp.js';
 import { UUID_RE } from './identity.js';
-import { handleLogin, handleLogout, requireAuth, isAuthed } from './auth.js';
+import { handleLogin, handleLogout, requireAuth, isAuthed, bearerToken, safeEqual } from './auth.js';
 import { trackRequest } from './logs.js';
 import { buildSubscription, pollAndPersist } from './pipeline.js';
 import { refreshRulesStep, getRulesStatus, fetchAndSaveIni } from './rulesfeed.js';
@@ -77,10 +77,12 @@ export async function handleMain({ request, env, ctx, url, identity }) {
   if (lower === 'robots.txt') return new Response('User-agent: *\nDisallow: /', { headers: { 'Content-Type': 'text/plain; charset=UTF-8' } });
 
   const store = createStore({ kv: env.KV, normalizeAccounts });
+  // 后台只认 ADMIN 一类变量（不回退到 UUID / KEY，它们会随订阅外泄）；没设时后台各入口返回"未设置管理员密码"
+  const adminLogin = identity.adminLogin ?? identity.adminPassword;
   const appCtx = {
-    request, url, env, executionCtx: ctx, now, identity, store, ip, ua, loc: request.cf?.country || '',
+    request, url, env, executionCtx: ctx, now, identity: { ...identity, adminPassword: adminLogin }, store, ip, ua, loc: request.cf?.country || '',
     fetchFn: globalThis.fetch, adminDeps: getAdminDeps(),
-    uuid: identity.uuid, secretKey: identity.secretKey, adminPassword: identity.adminPassword,
+    uuid: identity.uuid, secretKey: identity.secretKey, adminPassword: adminLogin,
   };
 
   // 隐藏后台入口（可选）：设置环境变量 LOGIN_PATH 后，登录页只在 /<LOGIN_PATH>；未登录访问 /login、/admin、/admin/api/*
@@ -108,10 +110,14 @@ export async function handleMain({ request, env, ctx, url, identity }) {
     return new Response(r.body, { status: r.status, headers: h });
   };
   const notFound = () => camouflage(request, url, env.URL || 'nginx');
+  // 订阅以外的路径都可能要校验后台 cookie：先取签名密钥（isolate 内缓存 1 小时）
+  if (lower !== 'sub' && adminLogin) appCtx.authSecret = await store.getAuthSecret();
+  // 隐藏入口下只有带正确 Bearer 令牌的脚本才能绕过伪装（随便带个 Authorization 头不行，否则会暴露后台存在）
+  const bearerOk = () => { const t = bearerToken(request); return !!t && !!adminLogin && safeEqual(t, adminLogin); };
   if (hidden && lower !== 'sub') {
     if (path === hidden) lower = 'login';
     else if (lower === 'login') return notFound();
-    else if ((lower === 'admin' || lower.startsWith('admin/') || lower === 'locations') && !isAuthed(appCtx) && !request.headers.get('Authorization')) return notFound();
+    else if ((lower === 'admin' || lower.startsWith('admin/') || lower === 'locations') && !isAuthed(appCtx) && !bearerOk()) return notFound();
   }
 
   if (lower === 'login') {
@@ -159,7 +165,8 @@ export async function handleMain({ request, env, ctx, url, identity }) {
     try {
       const out = await buildSubscription({
         store, settings, identity, request, url, now, waitUntil, format, ip, ua, generatorMode, unsupportedFormat: fi.unsupported,
-        subParam: url.searchParams.get('sub') || '',
+        // 生成器模式不需要 token、也不限速：不接受 sub=（否则匿名请求可以让主站去抓任意地址）
+        subParam: generatorMode ? '' : (url.searchParams.get('sub') || ''),
       });
       waitUntil(trackRequest({ ...appCtx, settings }, {
         type: generatorMode ? 'Get_Best_SUB' : 'Get_SUB',
@@ -169,7 +176,7 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       return new Response(out.body, { status: 200, headers: out.headers });
     } catch (e) {
       console.error('[sub] 生成失败', e);
-      return new Response('订阅生成失败：' + (e?.message || e), { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+      return new Response('订阅生成失败，请稍后再试', { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
     }
   }
 

@@ -1817,7 +1817,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 
 	async function connectProxyIP(address, port, data = null, 所有反代数组 = null, 启用反代失败兜底 = true) {
 		if (所有反代数组 && 所有反代数组.length > 0) {
-			所有反代数组 = 所有反代数组.filter(([a, p]) => !反代近期失败(a, p)).concat(所有反代数组.filter(([a, p]) => 反代近期失败(a, p))); // [NT-HOOK]
+			if (所有反代数组.some(([a, p]) => 反代近期失败(a, p))) 所有反代数组 = 所有反代数组.filter(([a, p]) => !反代近期失败(a, p)).concat(所有反代数组.filter(([a, p]) => 反代近期失败(a, p))); // [NT-HOOK]
 			const 实际并发数 = Math.max(1, Math.floor(Number(反代并发拨号数) || 1));
 			for (let i = 0; i < 所有反代数组.length; i += 实际并发数) {
 				const 候选列表 = [];
@@ -1833,7 +1833,6 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 					socket = 连接结果.socket;
 					candidate = 连接结果.candidate;
 					await 写入首包(socket, data);
-					if (首包可等待(data)) socket = await 等待反代首包(socket, 反代首包超时毫秒); // [NT-HOOK]
 					记录反代结果(candidate.hostname, candidate.port, true); // [NT-HOOK]
 					log(`[反代连接] 成功连接到: ${candidate.hostname}:${candidate.port} (索引: ${candidate.index})`);
 					反代数组索引 = candidate.index;
@@ -4981,33 +4980,6 @@ function 记录反代结果(地址, 端口, 成功) {
 function 反代近期失败(地址, 端口) {
 	const t = 反代健康.get(String(地址).toLowerCase() + ':' + 端口);
 	return !!t && Date.now() - t < 反代失败冷却毫秒;
-}
-// [NT-HOOK] 首包完整（一整条 TLS 记录或完整的 HTTP 请求头）时，等反代送回第一段回应再交给客户端；
-// 反代连上却不回话（坏掉的公共反代常见）就换下一个候选。首包不完整时不等，避免需要更多客户端数据的连接被卡住。
-const 反代首包超时毫秒 = 4000;
-function 首包可等待(数据) {
-	const b = 数据 ? 数据转Uint8Array(数据) : null;
-	if (!b || b.byteLength < 5) return false;
-	if (b[0] === 0x16 && b[1] === 0x03) return b.byteLength >= 5 + ((b[3] << 8) | b[4]);
-	if (/^(GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH) /.test(String.fromCharCode(...b.subarray(0, 8)))) return textDecoder.decode(b).includes('\r\n\r\n');
-	return false;
-}
-async function 等待反代首包(socket, 超时毫秒) {
-	const reader = socket.readable.getReader();
-	let 定时器 = null;
-	try {
-		const 首 = await Promise.race([reader.read(), new Promise((_, reject) => { 定时器 = setTimeout(() => reject(new Error('反代已连接但 ' + 超时毫秒 + 'ms 内没有回应')), 超时毫秒) })]);
-		if (首.done || !首.value) throw new Error('反代连接后立即关闭');
-		const readable = new ReadableStream({
-			start(c) { c.enqueue(首.value) },
-			async pull(c) { const { value, done } = await reader.read(); if (done) c.close(); else c.enqueue(value) },
-			cancel(r) { return reader.cancel(r) }
-		});
-		return new Proxy(socket, { get(t, k) { if (k === 'readable') return readable; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v } });
-	} catch (e) {
-		try { reader.releaseLock() } catch (_) { }
-		throw e;
-	} finally { clearTimeout(定时器) }
 }
 
 async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com', UUID = '00000000-0000-4000-8000-000000000000') {

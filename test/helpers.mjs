@@ -1,8 +1,11 @@
 // 测试辅助（文件名不含 .test，不会被当作测试执行）
 import { defaultSettings } from '../src/control/settings.js';
 
+/** 测试 KV 预置的后台 cookie 签名密钥（app 级测试用它签 cookie） */
+export const TEST_AUTH_KEY = 'ab'.repeat(32);
+
 export function memKV(init = {}) {
-  const m = new Map(Object.entries(init).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]));
+  const m = new Map(Object.entries({ 'nt.authkey': TEST_AUTH_KEY, ...init }).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]));
   const kv = {
     reads: 0, writes: 0, m,
     async get(k, opt) { kv.reads++; const v = m.get(k); if (v == null) return null; return opt?.type === 'json' || opt === 'json' ? JSON.parse(v) : v; },

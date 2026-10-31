@@ -9,7 +9,7 @@ import { runScheduled, maintenanceTask } from '../src/control/cron.js';
 import { createStore } from '../src/control/store.js';
 import { deriveIdentity, authCookieValue } from '../src/control/identity.js';
 import { adminHtml, loginHtml } from '../src/admin/ui.js';
-import { memKV, fakeFetch } from './helpers.mjs';
+import { memKV, fakeFetch, TEST_AUTH_KEY } from './helpers.mjs';
 
 const realFetch = globalThis.fetch;
 beforeEach(() => { resetStoreState(); resetPipelineState(); resetRulesState(); });
@@ -94,7 +94,7 @@ test('后台：未登录跳登录页；登录后 state 与 preview 可用', asyn
   assert.equal(r1.status, 302);
   const lg = await worker.fetch(req('/login', 'Mozilla/5.0'), env, ctx);
   assert.match(await lg.text(), /name="password"/);
-  const cookie = 'auth=' + authCookieValue('Mozilla/5.0', id);
+  const cookie = 'auth=' + authCookieValue('Mozilla/5.0', id, { secret: TEST_AUTH_KEY });
   const h = { Cookie: cookie, 'X-Requested-With': 'nt', 'Content-Type': 'application/json' };
   const page = await worker.fetch(req('/admin', 'Mozilla/5.0', { headers: h }), env, ctx);
   assert.equal(page.status, 200);
@@ -142,7 +142,7 @@ test('KV 里保存的站点名是 edgetunnel：订阅文件名与后台页面都
   globalThis.fetch = fakeFetch({});
   const sub = await worker.fetch(req('/sub?token=' + id.subToken), env, ctx);
   assert.match(sub.headers.get('Content-Disposition'), /filename\*=utf-8''nicetunnel$/);
-  const h = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id) };
+  const h = { Cookie: 'auth=' + authCookieValue('Mozilla/5.0', id, { secret: TEST_AUTH_KEY }) };
   const page = await (await worker.fetch(req('/admin', 'Mozilla/5.0', { headers: h }), env, ctx)).text();
   assert.match(page, /<title>nicetunnel · 后台<\/title>/);
   assert.ok(!/edgetunnel/i.test(page.replace(/<script>[\s\S]*<\/script>/, '')), '页面可见部分不含 edgetunnel');

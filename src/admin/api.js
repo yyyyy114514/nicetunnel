@@ -382,9 +382,11 @@ export function createAdminApi(deps = {}) {
     const cfIds = new Set(inc.map((a) => a.auth.accountId).filter(Boolean));
     const mails = new Set(inc.map((a) => a.auth.email).filter(Boolean));
     const touched = r.accounts.filter((a) => a.hosts.some((h) => hosts.has(h)) || (a.auth.accountId && cfIds.has(a.auth.accountId)) || (a.auth.email && mails.has(a.auth.email)));
-    let polled;
-    if (body.poll === true && typeof deps.pollUsage === 'function') {
-      if (c.now - (st.lastUpsertPollAt || -Infinity) < 5e3) return errorResponse(429, 'throttled', 'poll 过于频繁，请 5 秒后再试', { retryAfter: 5, added: r.added, updated: r.updated }, { 'Retry-After': '5' });
+    let polled, pollSkipped;
+    if (body.poll === true && typeof deps.pollUsage === 'function' && c.now - (st.lastUpsertPollAt || -Infinity) < 5e3) {
+      // 账号已经保存：不能再返回 429（脚本会以为保存失败），只说明这次没轮询
+      pollSkipped = '轮询过于频繁，本次只保存、未轮询，请 5 秒后再试';
+    } else if (body.poll === true && typeof deps.pollUsage === 'function') {
       st.lastUpsertPollAt = c.now;
       const ids = touched.filter((a) => a.role !== 'off' && a.enabled !== false).slice(0, 40).map((a) => a.id);
       if (ids.length) {
@@ -394,7 +396,7 @@ export function createAdminApi(deps = {}) {
       }
     }
     track(ctx, c, 'Save_Config', `脚本新增/更新账号 新增${r.added} 更新${r.updated}`);
-    return jsonResponse({ ok: true, added: r.added, updated: r.updated, total: r.accounts.length, parseErrors, accounts: pubAccounts(touched), ...(polled ? { polled } : {}) });
+    return jsonResponse({ ok: true, added: r.added, updated: r.updated, total: r.accounts.length, parseErrors, accounts: pubAccounts(touched), ...(polled ? { polled } : {}), ...(pollSkipped ? { pollSkipped } : {}) });
   }
 
   /** POST /admin/api/accounts/delete —— Body：{ids?:[…], hosts?:[…]}，按 id 或 host 删除；返回删除的数量 */
@@ -767,6 +769,12 @@ export function createAdminApi(deps = {}) {
     // Bearer 鉴权的请求不依赖 cookie，不需要 CSRF 头
     const csrf = ctx.viaBearer ? null : checkCsrf(ctx.request);
     if (csrf) return csrf;
+    // 旧版 GET 接口（/admin/check 会让主站去连指定主机）：cookie 是 SameSite=Lax，别的网站顶层跳转也会带上。
+    // 浏览器会标明请求来源，来自其它站点的一律拒绝
+    if (legacy && !ctx.viaBearer && !legacy.softAuth) {
+      const site = (ctx.request.headers.get('Sec-Fetch-Site') || '').toLowerCase();
+      if (site === 'cross-site' || site === 'same-site') return errorResponse(403, 'csrf', '跨站请求，已拒绝');
+    }
 
     try {
       if (legacy) {

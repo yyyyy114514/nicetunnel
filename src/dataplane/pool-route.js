@@ -36,6 +36,11 @@ const health = new Map();
 const HEALTH_BAD_MS = 5 * 60e3;  // 拨号失败后的冷却期：期内该节点排到最后
 const HEALTH_GOOD_MS = 10 * 60e3; // 成功记录的有效期：期内该节点排到最前
 const HEALTH_MAX = 256;
+// 路径参数由持有 UUID 的人控制：限制列表地址数量 / 长度、正则长度并拒绝嵌套量词（防 ReDoS），缓存条数设上限
+const MAX_LIST_URLS = 4, MAX_URL_LEN = 512, MAX_RE_LEN = 200, MAX_KEYS = 64;
+const NESTED_QUANT = /\([^)]*[+*}][^)]*\)\s*[+*{]/;
+export function unsafeRegex(re) { return re.length > MAX_RE_LEN || NESTED_QUANT.test(re); }
+function capMap(m) { while (m.size > MAX_KEYS) m.delete(m.keys().next().value); }
 export function resetPoolRouteState() { cache.clear(); inflight.clear(); health.clear(); meta.clear(); }
 
 /** 链路拨号结果上报（由 adapter 经 configure 注入到 edt-core；也可直接调用，便于测试） */
@@ -84,7 +89,7 @@ export async function getList(url, re, { fetchFn = globalThis.fetch, now = Date.
   // 每个 URL 的 TTL 加最多 ±20% 的固定抖动：很多实例不会在同一秒一起去拉
   const base = Math.max(15, ttlSeconds) * 1000 * (1 + ((hash32(url) % 41) - 20) / 100);
   let st = meta.get(key);
-  if (!st) { st = { sig: '', mult: 1, fails: 0, nextAt: 0 }; meta.set(key, st); }
+  if (!st) { st = { sig: '', mult: 1, fails: 0, nextAt: 0 }; meta.set(key, st); capMap(meta); }
   const hit = cache.get(key);
   if (hit && now - hit.at < base * st.mult) return hit.parsed;
   // 失败退避期内不再外拉：有旧值就用旧值，没有才报错。
@@ -251,8 +256,9 @@ export async function resolvePoolRoute(url, uuid, { ip = '', fetchFn = globalThi
   if (data?.type !== POOL_TYPE) return { url, routed: false };
   // 契约：路径明文的 v 比本节点支持的更高 → 明确提示更新节点，而不是静默连错；未知字段一律忽略（向前兼容）
   if ((Number(data.v) || 1) > POOL_ROUTE_V) return { url, routed: true, error: '节点站点版本过旧，请更新节点 _worker.js（需要地区路由 v' + data.v + '）' };
-  const urls = (Array.isArray(data.u) ? data.u : []).filter((u) => /^https?:\/\//i.test(u));
+  const urls = (Array.isArray(data.u) ? data.u : []).filter((u) => typeof u === 'string' && u.length <= MAX_URL_LEN && /^https?:\/\//i.test(u)).slice(0, MAX_LIST_URLS);
   if (!urls.length || !data.region) return { url, routed: true, error: '地区路由参数无效' };
+  if (typeof data.r === 'string' && unsafeRegex(data.r)) return { url, routed: true, error: '地区路由参数无效（过滤正则过长或含嵌套量词）' };
 
   const key = `${data.region}|${data.kind || ''}`;
   const re = data.r || '';
