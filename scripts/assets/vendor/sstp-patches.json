@@ -1,0 +1,174 @@
+[
+  {
+    "label": "sstp 保活应答与常量（插在 SYN 之前）",
+    "search": "\t\tawait withTimeout(writer.write(buildTcpFrame(0x02)), 链路连接超时毫秒, 'SSTP TCP SYN write timed out');",
+    "replace": "\t\t// [NT-HOOK] SSTP/PPP 保活应答：SoftEther（VPN Gate）等服务端每隔几秒发送 SSTP ECHO_REQUEST 与 PPP LCP Echo-Request，\n\t\t// 客户端不应答时约 10~20 秒就断开会话。上游数据循环直接丢弃这些控制包，空闲稍久的连接就被服务端掐断\n\t\t// （客户端表现为\"用着用着突然断开、断断续续\"）。这里按协议应答，并识别服务端主动断开。\n\t\t// 返回 true 表示服务端要求结束会话。\n\t\tconst SSTP空闲超时毫秒 = 300000;\n\t\tconst 回应SSTP控制包 = body => {\n\t\t\tif (!body || body.byteLength < 2) return false;\n\t\t\tconst 消息类型 = readSstpUint16(body, 0);\n\t\t\tif (消息类型 === 0x0008) {\n\t\t\t\twriter.write(new Uint8Array([0x10, 0x01, 0x80, 0x08, 0x00, 0x09, 0x00, 0x00])).catch(() => { });\n\t\t\t\treturn false;\n\t\t\t}\n\t\t\tif (消息类型 === 0x0006) {\n\t\t\t\twriter.write(new Uint8Array([0x10, 0x01, 0x80, 0x08, 0x00, 0x07, 0x00, 0x00])).catch(() => { });\n\t\t\t\treturn true;\n\t\t\t}\n\t\t\treturn 消息类型 === 0x0005;\n\t\t};\n\t\tconst 回应PPP控制包 = ppp => {\n\t\t\tif (!ppp || ppp.protocol !== 0xc021 || !ppp.rawPacket || ppp.rawPacket.byteLength < 6) return false;\n\t\t\tconst 帧 = ppp.rawPacket;\n\t\t\tconst 长度 = Math.min(帧.byteLength - 2, readSstpUint16(帧, 4));\n\t\t\tif (ppp.code === 9 && 长度 >= 8) {\n\t\t\t\tconst reply = new Uint8Array(帧.subarray(0, 2 + 长度));\n\t\t\t\treply[2] = 10;\n\t\t\t\treply.fill(0, 6, 10);\n\t\t\t\twriter.write(buildSstpDataPacket(reply)).catch(() => { });\n\t\t\t\treturn false;\n\t\t\t}\n\t\t\tif (ppp.code === 5) {\n\t\t\t\tconst ack = new Uint8Array(帧.subarray(0, 6));\n\t\t\t\tack[2] = 6;\n\t\t\t\tack[4] = 0;\n\t\t\t\tack[5] = 4;\n\t\t\t\twriter.write(buildSstpDataPacket(ack)).catch(() => { });\n\t\t\t\treturn true;\n\t\t\t}\n\t\t\treturn false;\n\t\t};\n\n\t\tawait withTimeout(writer.write(buildTcpFrame(0x02)), 链路连接超时毫秒, 'SSTP TCP SYN write timed out');"
+  },
+  {
+    "label": "sstp SYN 等待：应答保活、RST 立即失败",
+    "search": "\t\t\tconst packet = await readPacket(链路连接超时毫秒);\n\t\t\tif (packet.isControl) continue;\n\t\t\tconst ppp = parsePPPFrame(packet.body);\n\t\t\tif (!ppp || ppp.protocol !== 0x0021) continue;\n\t\t\tconst tcp = matchIncomingIpPacket(ppp.ipPacket);\n\t\t\tif (!tcp || (tcp.flags & 0x12) !== 0x12) continue;",
+    "replace": "\t\t\tconst packet = await readPacket(链路连接超时毫秒);\n\t\t\tif (packet.isControl) { if (回应SSTP控制包(packet.body)) throw new Error('SSTP session closed by server'); continue; } // [NT-HOOK]\n\t\t\tconst ppp = parsePPPFrame(packet.body);\n\t\t\tif (ppp && ppp.protocol !== 0x0021) { if (回应PPP控制包(ppp)) throw new Error('SSTP PPP terminated by server'); continue; } // [NT-HOOK]\n\t\t\tif (!ppp) continue;\n\t\t\tconst tcp = matchIncomingIpPacket(ppp.ipPacket);\n\t\t\tif (tcp && (tcp.flags & 0x04)) throw new Error('SSTP TCP connection refused by target'); // [NT-HOOK] RST：立即失败，交给故障转移\n\t\t\tif (!tcp || (tcp.flags & 0x12) !== 0x12) continue;"
+  },
+  {
+    "label": "sstp 数据循环：保活应答、空闲超时、RST、序号校验",
+    "search": "\t\t\t\tfor (; ;) {\n\t\t\t\t\tconst packet = await readPacket(60000);\n\t\t\t\t\tif (packet.isControl) continue;\n\t\t\t\t\tconst ppp = parsePPPFrame(packet.body);\n\t\t\t\t\tif (!ppp || ppp.protocol !== 0x0021) continue;\n\t\t\t\t\tconst incoming = matchIncomingIpPacket(ppp.ipPacket);\n\t\t\t\t\tif (!incoming) continue;\n\n\t\t\t\t\tif (incoming.payloadOffset < ppp.ipPacket.byteLength) {",
+    "replace": "\t\t\t\tfor (; ;) {\n\t\t\t\t\t// [NT-HOOK] 原为 readPacket(60000)：空闲 60 秒即断开。应答保活后服务端每隔几秒都有包，5 分钟无任何包才视为链路已死\n\t\t\t\t\tconst packet = await readPacket(SSTP空闲超时毫秒);\n\t\t\t\t\tif (packet.isControl) { if (回应SSTP控制包(packet.body)) throw new Error('SSTP session closed by server'); continue; } // [NT-HOOK]\n\t\t\t\t\tconst ppp = parsePPPFrame(packet.body);\n\t\t\t\t\tif (!ppp) continue;\n\t\t\t\t\tif (ppp.protocol !== 0x0021) { if (回应PPP控制包(ppp)) throw new Error('SSTP PPP terminated by server'); continue; } // [NT-HOOK]\n\t\t\t\t\tconst incoming = matchIncomingIpPacket(ppp.ipPacket);\n\t\t\t\t\tif (!incoming) continue;\n\t\t\t\t\t// [NT-HOOK] 对端 RST：立即结束，而不是挂到超时\n\t\t\t\t\tif (incoming.flags & 0x04) throw new Error('SSTP TCP connection reset by peer');\n\t\t\t\t\t// [NT-HOOK] 序号校验：重复或乱序的段丢弃并重发当前 ACK（重复 ACK 触发对端快速重传），\n\t\t\t\t\t// 不再把错位数据拼进流里（错位会破坏上层 TLS，客户端表现为连接突然断开）\n\t\t\t\t\tif ((incoming.payloadOffset < ppp.ipPacket.byteLength || (incoming.flags & 0x01)) && incoming.sequence !== acknowledgementNumber) {\n\t\t\t\t\t\twriter.write(buildTcpFrame(0x10)).catch(() => { });\n\t\t\t\t\t\tcontinue;\n\t\t\t\t\t}\n\n\t\t\t\t\tif (incoming.payloadOffset < ppp.ipPacket.byteLength) {"
+  },
+  {
+    "label": "sstp 接收窗口：TCP 头的窗口字段改为随消费速度变化",
+    "search": "\t\t\tview.setUint16(42, 65535);",
+    "replace": "\t\t\tview.setUint16(42, 接收窗口); // [NT-HOOK] 原为固定 65535：不管下游读没读都让对端继续发，队列无限增长"
+  },
+  {
+    "label": "sstp 接收窗口：变量声明（SYN 之前）",
+    "search": "\t\tconst SSTP空闲超时毫秒 = 300000;",
+    "replace": "\t\tconst SSTP空闲超时毫秒 = 300000;\n\t\t// [NT-HOOK] 接收窗口流控：下游（客户端 WS）读得慢时，缓冲超过 SSTP接收缓冲字节 后按剩余空间缩小通告窗口，\n\t\t// 让对端放慢；读走后再发窗口更新。上游固定通告 65535 且立即确认，慢客户端 + 快服务端会让队列无限增长，\n\t\t// isolate 内存耗尽时同一 isolate 上所有用户的连接会一起断开。\n\t\tconst SSTP接收缓冲字节 = 4 * 1024 * 1024;\n\t\tlet 接收窗口 = 65535;"
+  },
+  {
+    "label": "sstp 接收窗口：按字节计量的可读流 + 读走后发送窗口更新",
+    "search": "\t\tconst readable = new ReadableStream({\n\t\t\tstart(controller) {\n\t\t\t\tstreamController = controller;\n\t\t\t},\n\t\t\tcancel() {\n\t\t\t\tclose();\n\t\t\t}\n\t\t});\n\n\t\t(async () => {",
+    "replace": "\t\tconst 计算接收窗口 = () => {\n\t\t\tconst 剩余 = streamController ? streamController.desiredSize : null;\n\t\t\treturn 剩余 === null || 剩余 === undefined ? 65535 : Math.max(0, Math.min(65535, Math.floor(剩余)));\n\t\t};\n\t\tconst readable = new ReadableStream({\n\t\t\tstart(controller) {\n\t\t\t\tstreamController = controller;\n\t\t\t},\n\t\t\tpull() {\n\t\t\t\t// [NT-HOOK] 下游读走数据、缓冲回落：之前缩小过窗口就立即发窗口更新，对端恢复发送\n\t\t\t\tif (接收窗口 < 65535) {\n\t\t\t\t\t接收窗口 = 计算接收窗口();\n\t\t\t\t\twriter.write(buildTcpFrame(0x10)).catch(() => { });\n\t\t\t\t}\n\t\t\t},\n\t\t\tcancel() {\n\t\t\t\tclose();\n\t\t\t}\n\t\t}, { highWaterMark: SSTP接收缓冲字节, size: chunk => chunk.byteLength });\n\n\t\t(async () => {"
+  },
+  {
+    "label": "sstp 接收窗口：确认时带上当前窗口",
+    "search": "\t\t\t\t\tpendingChunks = [];\n\t\t\t\t\tpendingLength = 0;\n\t\t\t\t\twriter.write(buildTcpFrame(0x10)).catch(() => { });",
+    "replace": "\t\t\t\t\tpendingChunks = [];\n\t\t\t\t\tpendingLength = 0;\n\t\t\t\t\t接收窗口 = 计算接收窗口(); // [NT-HOOK]\n\t\t\t\t\twriter.write(buildTcpFrame(0x10)).catch(() => { });"
+  },
+  {
+    "label": "sstp SYN 带 MSS 选项",
+    "search": "\t\tawait withTimeout(writer.write(buildTcpFrame(0x02)), 链路连接超时毫秒, 'SSTP TCP SYN write timed out');",
+    "replace": "\t\t// [NT-HOOK] SYN 带 MSS=1400 选项。上游 SYN 不带任何选项，按 RFC 对端只能假定 MSS=536，\n\t\t// 下行包数约多 2.6 倍：每个包都要在 JS 里解析，CPU 更高、吞吐更低（免费版每请求 CPU 有限）。\n\t\tconst 构建SYN = () => {\n\t\t\tconst base = buildTcpFrame(0x02);\n\t\t\tconst frame = new Uint8Array(base.byteLength + 4);\n\t\t\tframe.set(base);\n\t\t\tframe.set([0x02, 0x04, (SSTP_TCP_MSS >> 8) & 0xff, SSTP_TCP_MSS & 0xff], base.byteLength);\n\t\t\tconst view = new DataView(frame.buffer);\n\t\t\tframe[2] = ((frame.byteLength >> 8) & 0x0f) | 0x80;\n\t\t\tframe[3] = frame.byteLength & 0xff;\n\t\t\tview.setUint16(10, frame.byteLength - 8);\n\t\t\tview.setUint16(18, 0);\n\t\t\tview.setUint16(18, internetChecksum(frame, 8, 20));\n\t\t\tframe[40] = 0x60;\n\t\t\tview.setUint16(44, 0);\n\t\t\tconst tcpLength = frame.byteLength - 28;\n\t\t\tconst pseudo = new Uint8Array(12 + tcpLength);\n\t\t\tpseudo.set(frame.subarray(20, 28));\n\t\t\tpseudo[9] = 6;\n\t\t\tpseudo[10] = tcpLength >> 8;\n\t\t\tpseudo[11] = tcpLength & 0xff;\n\t\t\tpseudo.set(frame.subarray(28), 12);\n\t\t\tview.setUint16(44, internetChecksum(pseudo, 0, pseudo.byteLength));\n\t\t\treturn frame;\n\t\t};\n\t\tawait withTimeout(writer.write(构建SYN()), 链路连接超时毫秒, 'SSTP TCP SYN write timed out');"
+  },
+  {
+    "label": "sstp 发送窗口：状态与等待函数（SYN 之前）",
+    "search": "\t\tconst SSTP接收缓冲字节 = 4 * 1024 * 1024;\n\t\tlet 接收窗口 = 65535;",
+    "replace": "\t\tconst SSTP接收缓冲字节 = 4 * 1024 * 1024;\n\t\tlet 接收窗口 = 65535;\n\t\t// [NT-HOOK] 发送端遵守对端通告窗口。上游不看对端窗口、也不重传：客户端上传快于 SoftEther NAT 缓冲时，\n\t\t// 超窗的段被丢弃且永不重发，连接静默卡死。这里按\"在途字节 ≤ 对端窗口\"发送（在途为 0 时总允许发一段，兼作零窗口探测），\n\t\t// 背压一路传回客户端；60 秒窗口无进展则明确报错断开，而不是无声挂起。\n\t\tconst SSTP发送停滞毫秒 = 60000;\n\t\tlet 对端已确认 = 0, 对端窗口 = 65535, 发送等待 = [], 链路已结束 = null;\n\t\tconst 在途字节 = () => (sequenceNumber - 对端已确认) >>> 0;\n\t\tconst 唤醒发送 = () => { const list = 发送等待; 发送等待 = []; for (const f of list) f(); };\n\t\tconst 等待发送窗口 = () => new Promise((resolve, reject) => {\n\t\t\tconst 开始 = Date.now();\n\t\t\tlet 定时器 = null;\n\t\t\tconst check = () => {\n\t\t\t\tclearTimeout(定时器);\n\t\t\t\tif (链路已结束) return reject(链路已结束);\n\t\t\t\tconst inflight = 在途字节();\n\t\t\t\tconst 可发 = inflight === 0 ? Math.max(对端窗口, SSTP_TCP_MSS) : 对端窗口 - inflight;\n\t\t\t\tif (可发 > 0) return resolve(可发);\n\t\t\t\tif (Date.now() - 开始 > SSTP发送停滞毫秒) return reject(new Error('SSTP send window stalled'));\n\t\t\t\t发送等待.push(check);\n\t\t\t\t定时器 = setTimeout(() => { const i = 发送等待.indexOf(check); if (i >= 0) 发送等待.splice(i, 1); check(); }, 1000);\n\t\t\t};\n\t\t\tcheck();\n\t\t});"
+  },
+  {
+    "label": "sstp 发送窗口：SYN-ACK 时初始化",
+    "search": "\t\t\tacknowledgementNumber = (tcp.sequence + 1) >>> 0;",
+    "replace": "\t\t\tacknowledgementNumber = (tcp.sequence + 1) >>> 0;\n\t\t\t对端已确认 = sequenceNumber; // [NT-HOOK]\n\t\t\t对端窗口 = readSstpUint16(ppp.ipPacket, (ppp.ipPacket[0] & 0x0f) * 4 + 14);"
+  },
+  {
+    "label": "sstp 发送窗口：读循环里记录对端确认号与窗口",
+    "search": "\t\t\t\t\t// [NT-HOOK] 对端 RST：立即结束，而不是挂到超时",
+    "replace": "\t\t\t\t\t// [NT-HOOK] 记录对端确认号与通告窗口（未协商窗口缩放，按原值），唤醒等待发送的写入\n\t\t\t\t\tif (incoming.flags & 0x10) {\n\t\t\t\t\t\tconst ihl = (ppp.ipPacket[0] & 0x0f) * 4;\n\t\t\t\t\t\tconst ack = readSstpUint32(ppp.ipPacket, ihl + 8);\n\t\t\t\t\t\tif (((ack - 对端已确认) >>> 0) <= 在途字节()) {\n\t\t\t\t\t\t\t对端已确认 = ack;\n\t\t\t\t\t\t\t对端窗口 = readSstpUint16(ppp.ipPacket, ihl + 14);\n\t\t\t\t\t\t\t唤醒发送();\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t\t// [NT-HOOK] 对端 RST：立即结束，而不是挂到超时"
+  },
+  {
+    "label": "sstp 发送窗口：链路结束时唤醒等待者（FIN）",
+    "search": "\t\t\t\t\t\tconst controller = streamController;\n\t\t\t\t\t\tif (controller) {\n\t\t\t\t\t\t\ttry { controller.close() } catch (e) { }\n\t\t\t\t\t\t}\n\t\t\t\t\t\tclose();\n\t\t\t\t\t\treturn;",
+    "replace": "\t\t\t\t\t\tconst controller = streamController;\n\t\t\t\t\t\tif (controller) {\n\t\t\t\t\t\t\ttry { controller.close() } catch (e) { }\n\t\t\t\t\t\t}\n\t\t\t\t\t\t链路已结束 = new Error('SSTP connection closed by peer'); // [NT-HOOK]\n\t\t\t\t\t\t唤醒发送();\n\t\t\t\t\t\tclose();\n\t\t\t\t\t\treturn;"
+  },
+  {
+    "label": "sstp 发送窗口：链路出错时唤醒等待者",
+    "search": "\t\t\t\tconst controller = streamController;\n\t\t\t\tif (controller) {\n\t\t\t\t\ttry { controller.error(error) } catch (e) { }\n\t\t\t\t}\n\t\t\t\tsettleClosed(rejectClosed, error);\n\t\t\t\ttry { socket?.close?.() } catch (e) { }",
+    "replace": "\t\t\t\tconst controller = streamController;\n\t\t\t\tif (controller) {\n\t\t\t\t\ttry { controller.error(error) } catch (e) { }\n\t\t\t\t}\n\t\t\t\t链路已结束 = error; // [NT-HOOK]\n\t\t\t\t唤醒发送();\n\t\t\t\tsettleClosed(rejectClosed, error);\n\t\t\t\ttry { socket?.close?.() } catch (e) { }"
+  },
+  {
+    "label": "sstp 发送窗口：写入按窗口分批",
+    "search": "\t\t\tasync write(chunk) {\n\t\t\t\tconst bytes = 数据转Uint8Array(chunk);\n\t\t\t\tif (!bytes.byteLength) return;\n\t\t\t\tif (bytes.byteLength <= SSTP_TCP_MSS) {\n\t\t\t\t\tawait writer.write(buildTcpFrame(0x18, bytes));\n\t\t\t\t\tsequenceNumber = (sequenceNumber + bytes.byteLength) >>> 0;\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst frames = [];\n\t\t\t\tfor (let offset = 0; offset < bytes.byteLength; offset += SSTP_TCP_MSS) {\n\t\t\t\t\tconst segment = bytes.subarray(offset, Math.min(offset + SSTP_TCP_MSS, bytes.byteLength));\n\t\t\t\t\tframes.push(buildTcpFrame(0x18, segment));\n\t\t\t\t\tsequenceNumber = (sequenceNumber + segment.byteLength) >>> 0;\n\t\t\t\t}\n\t\t\t\tawait writer.write(拼接字节数据(...frames));\n\t\t\t},",
+    "replace": "\t\t\tasync write(chunk) {\n\t\t\t\tconst bytes = 数据转Uint8Array(chunk);\n\t\t\t\tif (!bytes.byteLength) return;\n\t\t\t\t// [NT-HOOK] 按对端窗口分批发送（见 等待发送窗口）\n\t\t\t\tlet offset = 0;\n\t\t\t\twhile (offset < bytes.byteLength) {\n\t\t\t\t\tconst 可发 = await 等待发送窗口();\n\t\t\t\t\tconst end = Math.min(bytes.byteLength, offset + 可发);\n\t\t\t\t\tconst frames = [];\n\t\t\t\t\tfor (let at = offset; at < end; at += SSTP_TCP_MSS) {\n\t\t\t\t\t\tconst segment = bytes.subarray(at, Math.min(at + SSTP_TCP_MSS, end));\n\t\t\t\t\t\tframes.push(buildTcpFrame(0x18, segment));\n\t\t\t\t\t\tsequenceNumber = (sequenceNumber + segment.byteLength) >>> 0;\n\t\t\t\t\t}\n\t\t\t\t\toffset = end;\n\t\t\t\t\tawait writer.write(frames.length === 1 ? frames[0] : 拼接字节数据(...frames));\n\t\t\t\t}\n\t\t\t},"
+  },
+  {
+    "label": "sstp 竞速拨号：同时拨前两台 SSTP 候选，先握手成功者胜出",
+    "search": "\t\t\t\t\tconst 隧道 = await sstpConnect(ctx代理参数, host, portNum, TCP连接);",
+    "replace": "\t\t\t\t\t// [NT-HOOK] SSTP 竞速：VPN Gate 一类节点握手失败率高、耗时波动大。地区路由传来候选链时，\n\t\t\t\t\t// 同时拨当前候选和下一台未试过的 SSTP 候选，先完成握手的胜出、另一条关闭。\n\t\t\t\t\t// 仍是同一个 Worker 请求，不额外消耗请求额度；代价是多一个 VPN 会话。CHAIN_RACE=1 关闭。\n\t\t\t\t\tconst 隧道 = await (async () => {\n\t\t\t\t\t\tconst 备选 = (链路竞速数 > 1 && Array.isArray(反代上下文.代理候选))\n\t\t\t\t\t\t\t? 反代上下文.代理候选.find(c => c && String(c.type).toLowerCase() === 'sstp' && c.hostname && c.port && !已试链路.has(链式键('sstp', c)))\n\t\t\t\t\t\t\t: null;\n\t\t\t\t\t\tif (!备选) return sstpConnect(ctx代理参数, host, portNum, TCP连接);\n\t\t\t\t\t\tconst 备选参数 = { username: 备选.username, password: 备选.password, hostname: 备选.hostname, port: Number(备选.port) };\n\t\t\t\t\t\t已试链路.add(链式键('sstp', 备选参数));\n\t\t\t\t\t\tconst 当前参数 = ctx代理参数;\n\t\t\t\t\t\tconst 上报失败 = p => { try { if (链路结果钩子) 链路结果钩子(false, p.hostname, p.port) } catch (_) { } };\n\t\t\t\t\t\tconst 主 = sstpConnect(当前参数, host, portNum, TCP连接).then(t => ({ t, p: 当前参数 }));\n\t\t\t\t\t\tconst 副 = sstpConnect(备选参数, host, portNum, TCP连接).then(t => ({ t, p: 备选参数 }));\n\t\t\t\t\t\tlet 胜者;\n\t\t\t\t\t\ttry { 胜者 = await Promise.any([主, 副]) } catch (e) {\n\t\t\t\t\t\t\t上报失败(备选参数); // 当前候选的失败由外层统一上报\n\t\t\t\t\t\t\tthrow (e && e.errors && e.errors[0]) || e;\n\t\t\t\t\t\t}\n\t\t\t\t\t\tfor (const 尝试 of [主, 副]) 尝试.then(r => { if (r.t !== 胜者.t) { try { r.t.close() } catch (_) { } } }, () => { });\n\t\t\t\t\t\tif (胜者.p === 当前参数) 副.catch(() => 上报失败(备选参数));\n\t\t\t\t\t\telse {\n\t\t\t\t\t\t\t主.catch(() => 上报失败(当前参数));\n\t\t\t\t\t\t\tctx代理参数 = 胜者.p; // 胜者成为当前链路，成功由外层上报\n\t\t\t\t\t\t}\n\t\t\t\t\t\tlog(`[SSTP竞速] 胜出: ${胜者.p.hostname}:${胜者.p.port}`);\n\t\t\t\t\t\treturn 胜者.t;\n\t\t\t\t\t})();"
+  },
+  {
+    "label": "认证失败上报（trojan，WS 与 gRPC 各一处）",
+    "expect": 2,
+    "search": "if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid trojan request');",
+    "replace": "if (解析结果?.hasError) { try { if (认证失败钩子) 认证失败钩子(request, 解析结果.message) } catch (_) { } throw new Error(解析结果.message || 'Invalid trojan request') } // [NT-HOOK] 首包认证失败上报（adapter 按 IP 限流，挡扫描与爆破）"
+  },
+  {
+    "label": "认证失败上报（魏烈思，WS 与 gRPC 各一处）",
+    "expect": 2,
+    "search": "if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid 魏烈思 request');",
+    "replace": "if (解析结果?.hasError) { try { if (认证失败钩子) 认证失败钩子(request, 解析结果.message) } catch (_) { } throw new Error(解析结果.message || 'Invalid 魏烈思 request') } // [NT-HOOK] 首包认证失败上报（adapter 按 IP 限流，挡扫描与爆破）"
+  },
+  {
+    "label": "失败日志钩子：节点自报统计（log 里的 失败/超时 行计数并保留最近几条）",
+    "search": "function log(...args) {\n\tif (调试日志打印) console.log(...args);\n}",
+    "replace": "function log(...args) {\n\tif (调试日志打印) console.log(...args);\n\tif (失败日志钩子 && typeof args[0] === 'string' && (args[0].includes('失败') || args[0].includes('超时'))) { try { 失败日志钩子(args[0]) } catch (e) { } } // [NT-HOOK] 失败计数（节点自报统计，/version?stats=1）\n}"
+  },
+  {
+    "label": "备用 TCP 连接器：没有 request.fetcher（如部分 Pages 项目）时改用 cloudflare:sockets connect()",
+    "search": "\tif (!fetcher || typeof fetcher.connect !== 'function') throw new Error('request.fetcher.connect unavailable');",
+    "replace": "\tif (备用TCP连接 && (备用TCP连接优先 || !fetcher || typeof fetcher.connect !== 'function')) return (options, init) => init === undefined ? 备用TCP连接(options) : 备用TCP连接(options, init); // [NT-HOOK] 没有 request.fetcher 时用 cloudflare:sockets\n\tif (!fetcher || typeof fetcher.connect !== 'function') throw new Error('request.fetcher.connect unavailable');"
+  },
+  {
+    "label": "SSTP 降 CPU：校验和内联读取并支持初值（伪首部直接累加）",
+    "search": "function internetChecksum(bytes, offset, length) {\n\tlet sum = 0;\n\tfor (let index = offset; index < offset + length - 1; index += 2) sum += readSstpUint16(bytes, index);",
+    "replace": "function internetChecksum(bytes, offset, length, initial = 0) { // [NT-HOOK] 内联读取；initial=伪首部和，免去整段拷贝\n\tlet sum = initial;\n\tconst end = offset + length - 1;\n\tfor (let index = offset; index < end; index += 2) sum += (bytes[index] << 8) | bytes[index + 1];"
+  },
+  {
+    "label": "SSTP 降 CPU：IP 标识递增 + 预算伪首部和",
+    "search": "\t\ttcpPseudoHeader[9] = 6;\n\t\tconst buildTcpFrame = (flags, payload = SSTP_EMPTY_BYTES) => {",
+    "replace": "\t\ttcpPseudoHeader[9] = 6;\n\t\t// [NT-HOOK] 伪首部（源/目的地址 + 协议号）的和只算一次；IP 标识改为递增（原每帧调用一次 crypto 随机数）\n\t\tconst 伪首部和 = ((sourceAddress[0] << 8) | sourceAddress[1]) + ((sourceAddress[2] << 8) | sourceAddress[3]) + ((destinationAddress[0] << 8) | destinationAddress[1]) + ((destinationAddress[2] << 8) | destinationAddress[3]) + 6;\n\t\tlet IP标识 = randomSstpUint16();\n\t\tconst buildTcpFrame = (flags, payload = SSTP_EMPTY_BYTES, 目标 = null, 目标偏移 = 0) => { // [NT-HOOK] 可直接写进批量缓冲区"
+  },
+  {
+    "label": "SSTP 降 CPU：帧可写入外部缓冲区",
+    "search": "\t\t\tconst frame = new Uint8Array(sstpLength);\n\t\t\tconst view = new DataView(frame.buffer);\n\t\t\tframe.set([0x10, 0x00, ((sstpLength >> 8) & 0x0f) | 0x80, sstpLength & 0xff, 0xff, 0x03, 0x00, 0x21]);",
+    "replace": "\t\t\tconst frame = 目标 ? 目标.subarray(目标偏移, 目标偏移 + sstpLength) : new Uint8Array(sstpLength);\n\t\t\tconst view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);\n\t\t\tframe.set([0x10, 0x00, ((sstpLength >> 8) & 0x0f) | 0x80, sstpLength & 0xff, 0xff, 0x03, 0x00, 0x21]);"
+  },
+  {
+    "label": "SSTP 降 CPU：IP 标识递增",
+    "search": "\t\t\tview.setUint16(12, randomSstpUint16());",
+    "replace": "\t\t\tview.setUint16(12, (IP标识 = (IP标识 + 1) & 0xffff)); // [NT-HOOK]"
+  },
+  {
+    "label": "SSTP 降 CPU：TCP 校验和不再拷贝整段数据到伪首部缓冲区",
+    "search": "\t\t\ttcpPseudoHeader[10] = tcpLength >> 8;\n\t\t\ttcpPseudoHeader[11] = tcpLength & 0xff;\n\t\t\ttcpPseudoHeader.set(frame.subarray(28, 28 + tcpLength), 12);\n\t\t\tview.setUint16(44, internetChecksum(tcpPseudoHeader, 0, 12 + tcpLength));",
+    "replace": "\t\t\tview.setUint16(44, internetChecksum(frame, 28, tcpLength, 伪首部和 + tcpLength)); // [NT-HOOK] 伪首部和 + TCP 长度，直接对帧求和"
+  },
+  {
+    "label": "SSTP 降 CPU：上传一批分段直接写进同一块缓冲区",
+    "search": "\t\t\t\t\tconst frames = [];\n\t\t\t\t\tfor (let at = offset; at < end; at += SSTP_TCP_MSS) {\n\t\t\t\t\t\tconst segment = bytes.subarray(at, Math.min(at + SSTP_TCP_MSS, end));\n\t\t\t\t\t\tframes.push(buildTcpFrame(0x18, segment));\n\t\t\t\t\t\tsequenceNumber = (sequenceNumber + segment.byteLength) >>> 0;\n\t\t\t\t\t}\n\t\t\t\t\toffset = end;\n\t\t\t\t\tawait writer.write(frames.length === 1 ? frames[0] : 拼接字节数据(...frames));",
+    "replace": "\t\t\t\t\t// [NT-HOOK] 一批分段直接构造在同一块缓冲区里（原先逐帧分配后再整体拼接，多一次全量拷贝）\n\t\t\t\t\tconst 批 = new Uint8Array((end - offset) + Math.ceil((end - offset) / SSTP_TCP_MSS) * 48);\n\t\t\t\t\tlet 写位置 = 0;\n\t\t\t\t\tfor (let at = offset; at < end; at += SSTP_TCP_MSS) {\n\t\t\t\t\t\tconst segment = bytes.subarray(at, Math.min(at + SSTP_TCP_MSS, end));\n\t\t\t\t\t\t写位置 += buildTcpFrame(0x18, segment, 批, 写位置).byteLength;\n\t\t\t\t\t\tsequenceNumber = (sequenceNumber + segment.byteLength) >>> 0;\n\t\t\t\t\t}\n\t\t\t\t\toffset = end;\n\t\t\t\t\tawait writer.write(批);"
+  },
+  {
+    "label": "SSTP 降 CPU：跨块的包只拷贝凑齐所需的字节",
+    "search": "\tconst readBytes = async length => {\n\t\twhile (bufferedBytes.byteLength < length) {\n\t\t\tconst chunk = await readSocketChunk();\n\t\t\tbufferedBytes = bufferedBytes.byteLength ? 拼接字节数据(bufferedBytes, chunk) : chunk;\n\t\t}",
+    "replace": "\tconst readBytes = async length => {\n\t\twhile (bufferedBytes.byteLength < length) {\n\t\t\tconst chunk = await readSocketChunk();\n\t\t\t// [NT-HOOK] 包跨两个读取块时只拷贝凑齐这个包的部分，剩余仍是原块的视图（原先每次把整个新块拷一遍）\n\t\t\tconst 缺 = length - bufferedBytes.byteLength;\n\t\t\tif (bufferedBytes.byteLength && chunk.byteLength > 缺) {\n\t\t\t\tconst 拼好 = new Uint8Array(length);\n\t\t\t\t拼好.set(bufferedBytes);\n\t\t\t\t拼好.set(chunk.subarray(0, 缺), bufferedBytes.byteLength);\n\t\t\t\tbufferedBytes = chunk.subarray(缺);\n\t\t\t\treturn 拼好;\n\t\t\t}\n\t\t\tbufferedBytes = bufferedBytes.byteLength ? 拼接字节数据(bufferedBytes, chunk) : chunk;\n\t\t}"
+  },
+  {
+    "label": "SSTP 降 CPU：缓冲区里已有完整的包时同步取出（不建定时器与 Promise）",
+    "search": "\tconst buildSstpDataPacket = pppFrame => {",
+    "replace": "\t// [NT-HOOK] 数据循环里每个包原先都要经过两次 withTimeout（各一个定时器 + 若干 Promise），是下行 CPU 的大头。\n\t// 缓冲区里已经有完整的包时直接同步取出；不完整时才走 readPacket（带超时）。\n\tconst 同步取包 = () => {\n\t\tif (bufferedBytes.byteLength < 4) return null;\n\t\tconst length = readSstpUint16(bufferedBytes, 2) & 0x0fff;\n\t\tif (length < 4 || bufferedBytes.byteLength < length) return null;\n\t\tconst packet = { isControl: (bufferedBytes[1] & 1) !== 0, body: length > 4 ? bufferedBytes.subarray(4, length) : SSTP_EMPTY_BYTES };\n\t\tbufferedBytes = bufferedBytes.subarray(length);\n\t\treturn packet;\n\t};\n\tconst buildSstpDataPacket = pppFrame => {"
+  },
+  {
+    "label": "SSTP 降 CPU：数据循环优先同步取包",
+    "search": "\t\t\t\t\tconst packet = await readPacket(SSTP空闲超时毫秒);",
+    "replace": "\t\t\t\t\tconst packet = 同步取包() || await readPacket(SSTP空闲超时毫秒); // [NT-HOOK] 有完整包就同步取"
+  },
+  {
+    "label": "SSTP 降 CPU：下行负载不再逐包拷贝（flush 时统一拼接一次）",
+    "search": "\t\t\t\t\t\t\tpendingChunks.push(new Uint8Array(payload));",
+    "replace": "\t\t\t\t\t\t\tpendingChunks.push(payload); // [NT-HOOK] 原为逐包拷贝；读取块不会被复用，保留视图即可"
+  },
+  {
+    "label": "SSTP 建连提速：服务器建连 / 首个 HTTP 响应的超时常量",
+    "search": "const SSTP_EMPTY_BYTES = new Uint8Array(0);",
+    "replace": "const SSTP_EMPTY_BYTES = new Uint8Array(0);\n// [NT-HOOK] 连上 VPN 服务器、收到它的第一个 HTTP 响应各最多等这么久。原先用 链路连接超时毫秒（约 6 秒），\n// 比客户端测速的超时（通常 5 秒）还长：死节点会把整次测速拖成超时，故障转移根本来不及。\nconst 链路建连超时毫秒 = 3000;"
+  },
+  {
+    "label": "SSTP 建连提速：目标域名解析与 VPN 握手并行",
+    "search": "\t\tconst serverPort = proxy.port;",
+    "replace": "\t\tconst serverPort = proxy.port;\n\t\tconst 预解析目标 = isIPv4(stripIPv6Brackets(targetHost)) ? null : DoH查询(stripIPv6Brackets(targetHost), 'A').catch(() => []); // [NT-HOOK] 原先隧道建好后才开始查"
+  },
+  {
+    "label": "SSTP 建连提速：服务器建连超时 3 秒",
+    "search": "\t\tawait withTimeout(socket.opened, 链路连接超时毫秒, 'SSTP server connection timed out');",
+    "replace": "\t\tawait withTimeout(socket.opened, Math.min(链路连接超时毫秒, 链路建连超时毫秒), 'SSTP server connection timed out'); // [NT-HOOK]"
+  },
+  {
+    "label": "SSTP 建连提速：首个 HTTP 响应超时 3 秒",
+    "search": "\t\tconst statusLine = await withTimeout(readHttpLine(), 链路连接超时毫秒,",
+    "replace": "\t\tconst statusLine = await withTimeout(readHttpLine(), Math.min(链路连接超时毫秒, 链路建连超时毫秒),"
+  },
+  {
+    "label": "SSTP 建连提速：使用预先开始的目标解析",
+    "search": "\t\t\tconst records = await DoH查询(target, 'A');",
+    "replace": "\t\t\tconst records = await (预解析目标 || DoH查询(target, 'A')); // [NT-HOOK]"
+  }
+]

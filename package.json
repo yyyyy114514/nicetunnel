@@ -1,0 +1,17 @@
+{
+  "name": "nicetunnel",
+  "version": "0.1.0",
+  "description": "多账号 Cloudflare 免费额度感知的边缘代理 + 订阅系统（edgetunnel 重写）",
+  "type": "module",
+  "license": "GPL-2.0-only",
+  "private": true,
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "build": "node scripts/build.mjs",
+    "verify": "node scripts/verify-build.mjs"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^4.1.1",
+    "terser": "^5.44.1"
+  }
+}

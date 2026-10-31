@@ -1,0 +1,5 @@
+edt-package/ 里的文件原样取自 https://github.com/cmliu/edgetunnel （GPL-2.0），提交 a8ab111（2026-10-09，Merge pull request #1794 from cmliu/beta2.1）。
+除 _worker.js 之外的全部文件，未做任何修改（保留原有的 CRLF 换行）。构建时 scripts/build.mjs 会把它们和我们自己的 _worker.js 一起放进 dist/nicetunnel.zip，
+使压缩包的结构与 edgetunnel 的 main.zip 一致。不需要时用 `node scripts/build.mjs --no-extras`。
+注意：其中 wrangler.toml / README.md / CHANGELOG 是 edgetunnel 的；.github/workflows/sync.yml 在 GitHub 的 fork 仓库里会从 cmliu/edgetunnel 强制同步——
+这个 zip 只用于 Cloudflare Pages 上传，不要把解压后的内容推到你自己的 GitHub fork 仓库。

@@ -1,0 +1,82 @@
+		const 当前连接任务 = (async () => {
+			let newSocket = null;
+			const 执行一次拨号 = async () => {
+				if (使用木马反代) {
+					log(`[木马反代] 代理到: ${host}:${portNum}`);
+					return await 连接木马反代(本次首包数据, TCP连接, 木马反代目标);
+				} else if (ctx代理类型 === 'socks5') {
+					log(`[SOCKS5代理] 代理到: ${host}:${portNum}`);
+					return await socks5Connect(host, portNum, 本次首包数据, TCP连接, ctx代理参数);
+				} else if (ctx代理类型 === 'http') {
+					log(`[HTTP代理] 代理到: ${host}:${portNum}`);
+					return await httpConnect(host, portNum, 本次首包数据, false, TCP连接, ctx代理参数);
+				} else if (ctx代理类型 === 'https') {
+					log(`[HTTPS代理] 代理到: ${host}:${portNum}`);
+					return await (isIPHostname(ctx代理参数.hostname)
+						? httpsConnect(host, portNum, 本次首包数据, TCP连接, ctx代理参数)
+						: httpConnect(host, portNum, 本次首包数据, true, TCP连接, ctx代理参数));
+				} else if (ctx代理类型 === 'turn') {
+					log(`[TURN代理] 代理到: ${host}:${portNum}`);
+					const 隧道 = await turnConnect(ctx代理参数, host, portNum, TCP连接);
+					if (有效数据长度(本次首包数据) > 0) {
+						const writer = 隧道.writable.getWriter();
+						try { await writer.write(数据转Uint8Array(本次首包数据)) }
+						finally { try { writer.releaseLock() } catch (e) { } }
+					}
+					return 隧道;
+				} else if (ctx代理类型 === 'sstp') {
+					log(`[SSTP代理] 代理到: ${host}:${portNum}`);
+					const 隧道 = await sstpConnect(ctx代理参数, host, portNum, TCP连接);
+					if (有效数据长度(本次首包数据) > 0) {
+						const writer = 隧道.writable.getWriter();
+						try { await writer.write(数据转Uint8Array(本次首包数据)) }
+						finally { try { writer.releaseLock() } catch (e) { } }
+					}
+					return 隧道;
+				}
+				log(`[反代连接] 代理到: ${host}:${portNum}`);
+				const 所有反代数组 = await 解析地址端口(ctx反代IP, host, yourUUID);
+				return await connectProxyIP(`${特征码字典[0]}.tp1.${特征码字典[2]}.xyz`, 1, 本次首包数据, 所有反代数组, ctx反代兜底);
+			};
+			// [NT-HOOK] 链式拨号故障转移：地区路由把候选节点按健康度排好后一起传进来（反代上下文.代理候选）。
+			// 当前这台拨不通就换下一台重试，而不是立刻掐断客户端 WS——上游行为会让客户端表现为"突然断连"。
+			// 非地区路由（没有代理候选）时 最大转移次数 = 0，行为与上游逐字一致。
+			const 故障转移候选 = Array.isArray(反代上下文.代理候选) ? 反代上下文.代理候选 : null;
+			const 链式键 = (t, p) => String(t || '') + '|' + String(p?.hostname || '').toLowerCase() + '|' + Number(p?.port || 0);
+			const 已试链路 = new Set(ctx代理类型 ? [链式键(ctx代理类型, ctx代理参数)] : []);
+			const 最大转移次数 = (故障转移候选 && ctx代理类型) ? Math.min(链路故障转移次数, 故障转移候选.length) : 0;
+			let 转移计数 = 0;
+			for (; ;) {
+				try {
+					newSocket = await 执行一次拨号();
+					await 安装当前连接(newSocket, 当前连接世代, downlinkDrain);
+					try { if (ctx代理类型 && 链路结果钩子) 链路结果钩子(true, ctx代理参数?.hostname, ctx代理参数?.port) } catch (e) { } // [NT-HOOK] 链路拨号成功反馈（地区路由健康缓存用）
+					if (本次发送首包) 已通过代理发送首包 = true;
+					return;
+				} catch (err) {
+					try { newSocket?.close?.() } catch (e) { }
+					newSocket = null;
+					if (remoteConnWrapper.generation !== 当前连接世代) return;
+					try { if (ctx代理类型 && 链路结果钩子) 链路结果钩子(false, ctx代理参数?.hostname, ctx代理参数?.port) } catch (e) { } // [NT-HOOK] 链路拨号失败反馈（地区路由健康缓存用）
+					let 下一台 = null;
+					if (转移计数 < 最大转移次数) {
+						for (const 候选 of 故障转移候选) {
+							if (!候选 || !候选.type || !候选.hostname || !候选.port) continue;
+							if (已试链路.has(链式键(候选.type, 候选))) continue;
+							下一台 = 候选;
+							break;
+						}
+					}
+					if (!下一台) {
+						remoteConnWrapper.socket = null;
+						closeSocketQuietly(ws);
+						throw err;
+					}
+					已试链路.add(链式键(下一台.type, 下一台));
+					转移计数++;
+					log(`[链路故障转移] 第 ${转移计数} 次：${ctx代理类型} → ${下一台.type} ${下一台.hostname}:${下一台.port}`);
+					ctx代理类型 = String(下一台.type).toLowerCase();
+					ctx代理参数 = { username: 下一台.username, password: 下一台.password, hostname: 下一台.hostname, port: Number(下一台.port) };
+				}
+			}
+		})();

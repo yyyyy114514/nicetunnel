@@ -1,0 +1,9 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+
+/index.html
+  Cache-Control: public, max-age=300
+
+/favicon.svg
+  Cache-Control: public, max-age=86400

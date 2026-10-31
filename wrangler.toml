@@ -1,0 +1,22 @@
+# 主站（main）示例配置：Workers + KV + Cron。节点站点（Pages，无 KV）无需此文件，直接上传 dist/_worker.js。
+name = "nicetunnel"
+main = "dist/_worker.js"
+compatibility_date = "2025-09-01"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "在此填入你的 KV namespace id"
+
+# 每 5 分钟：分批轮询各账号用量 + 一小块维护（规则列表 / CIDR / 日志落盘）
+# 免费版 Cron 每次触发 CPU 上限 10ms（网络等待不计），代码已按小块设计
+[triggers]
+crons = ["*/5 * * * *"]
+
+# 环境变量（敏感值请用 `wrangler secret put`）：
+# ADMIN  后台密码（必填）
+# KEY    快速订阅路径 / 加密密钥（可选，与 edgetunnel 同义）
+# UUID   固定 UUID（可选；所有节点站点必须一致）
+# HOST   订阅 token 绑定的域名（可选；不填=请求域名）
+# MODE   main | node | auto（默认 auto：有 KV=main）
+[vars]
+MODE = "auto"

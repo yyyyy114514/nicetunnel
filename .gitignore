@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# 本地私有资料：开发笔记、对话记忆、内部交接文档
+handoff/
+mem/
+.workbuddy/
+docs/HANDOFF.md
+.claude/
+*.log
