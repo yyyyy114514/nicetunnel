@@ -524,7 +524,9 @@ function clientMain() {
     const line = tocOffset() + 8;
     let cur = 0;
     cards.forEach((c, i) => { if (c.getBoundingClientRect().top <= line) cur = i; });
-    if (window.scrollY + innerHeight >= document.documentElement.scrollHeight - 4) cur = cards.length - 1; // 到底了：最后一张卡片可能顶不到索引线
+    // 滚到底了：最后一张卡片可能顶不到索引线。只在页面确实能滚动、并且已经往下滚过时才这样算（整页一屏放得下时保持高亮第一项）
+    const docH = document.documentElement.scrollHeight;
+    if (docH > innerHeight + 4 && window.scrollY > 0 && window.scrollY + innerHeight >= docH - 4) cur = cards.length - 1;
     markToc(cur);
   }
   // 滚动时节流更新高亮（最多每 80ms 一次，停下后再补一次）
@@ -742,7 +744,7 @@ function clientMain() {
     if (b.dataset.tab === tab) return;
     if (dirty && !confirm('这一页有改动还没保存，离开会丢失。确定离开？')) return;
     tab = b.dataset.tab; try { localStorage.setItem('nt.tab', tab); } catch {}
-    render(); window.scrollTo(0, 0);
+    window.scrollTo(0, 0); render(); // 先回到顶部再渲染：页内索引的高亮按新页面的位置计算
   });
   window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
   reload().catch((e) => { $('main').innerHTML = `<div class="card"><h2><i></i>加载失败</h2><p>${h(e.message)}</p></div>`; });

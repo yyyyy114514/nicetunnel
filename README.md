@@ -96,6 +96,15 @@ npm run build -- --no-extras       # zip 里只放 _worker.js
 - **检测工具**：后台「检测工具」页显示 Cloudflare 看到的你的 IP / ASN / 运营商 / 接入点，以及订阅据此自适应的结果；还可检测 SOCKS5/HTTP/HTTPS/TURN/SSTP 代理和优选 URL 是否可用。
 - **订阅与规则**：填 INI 地址（默认是作者的 `subconfig2.ini`），点「获取并保存」把转换配置下载进 KV；之后订阅只读缓存，**不会再连远程**。规则模式 `expand`（规则直接写进配置）或 `provider`（客户端自己拉规则）。「自动更新转换配置」关掉后，只有再点「获取并保存」才会更新。
 
+### 后台演示站（只看交互，不需要任何账号）
+
+`npm run demo`（即 `node scripts/build-demo.mjs`）生成纯静态的演示站：`dist/demo/` 文件夹和 `dist/nicetunnel-demo.zip`。在 Cloudflare Pages 新建项目 → 直接上传这个文件夹或 zip 即可，不需要环境变量、不需要 KV。
+
+- 页面就是真实的后台；`demo/mock.js` 在浏览器里模拟后台接口，**不连接任何服务器**，所有改动只保存在访问者自己的浏览器（localStorage），每个人看到的都是自己的一份。
+- 设置清洗、账号合并、额度分配、配置自检用的是项目里的真实模块，所以改设置、改账号后概览和自检的变化与真后台一致。
+- 内置演示数据覆盖各种状态：正常 / 偏低 / 耗尽 / 过期 / 轮询失败 / 需要手填 Account ID（填上再轮询就会恢复）/ 没填凭据 / 停用 / 付费账号 / pages.dev 默认域名；"检测节点"会给出正常、版本落后、edt 原版、读不到、UUID 不符、不可达、改用 cloudflare:sockets 等所有结果。
+- 页面顶部横幅里的"恢复初始演示数据"可以随时重来；「系统 → 全部重置」也会恢复演示数据。
+
 ## 从 edgetunnel 迁移
 
 主站首次启动时会读取 KV 里 edgetunnel 的 `config.json` / `tg.json` / `cf.json` / `ADD.txt`，自动转换为新配置（旧键只读不删，可随时切回）。旧的 `HOSTS` 会作为"未纳入管理的域名"继续参与分配，导入账号后即可按额度分配。
