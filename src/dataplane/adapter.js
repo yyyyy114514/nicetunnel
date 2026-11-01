@@ -57,6 +57,24 @@ export const isCredentialFailure = (message) => /invalid (uuid|password)/i.test(
 const GUARD_OFF = (env) => ['0', 'false', 'off'].includes(String(env.GUARD ?? '').toLowerCase());
 const DEFAULT_WHITELIST = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
 
+/**
+ * 滥用防护：这些出站端口默认一律拒绝（PORT_GUARD=0 关闭）。
+ * 代理被举报进 T&S 审查的头号来源是第三方拿到订阅链接后借道发垃圾邮件（SMTP）；
+ * 挡住这些端口能直接消灭绝大多数「别人拿你的节点干坏事 → 受害方举报 → 账号被审查」的链路。
+ */
+const BLOCKED_OUTBOUND_PORTS = new Set([25, 465, 587, 2525]);
+export const isBlockedOutboundPort = (port) => BLOCKED_OUTBOUND_PORTS.has(Number(port));
+/** 出站连接守卫：注入数据面 configure({connectGuardHook})，在每条 TCP 建立前调用；被拦端口抛错即拒绝连接。 */
+export const outboundPortGuard = (opt) => {
+  const port = Number(opt?.port);
+  if (BLOCKED_OUTBOUND_PORTS.has(port)) {
+    bump('portBlocked');
+    recordFail('[TCP] 出站端口被拒：' + (opt?.hostname || '') + ':' + port);
+    throw new Error('outbound port blocked: ' + port);
+  }
+};
+const PORT_GUARD_OFF = (env) => ['0', 'false', 'off'].includes(String(env.PORT_GUARD ?? '').toLowerCase());
+
 /** 按环境变量设置上游模块级开关（39–55 行）。与上游不同：移动用户的单路拨号只作用于本次计算，不会"粘"在 isolate 上。 */
 async function applyEnv(request, env) {
   if (whitelistCache === null) {
@@ -81,6 +99,8 @@ async function applyEnv(request, env) {
     authFailHook: GUARD_OFF(env) ? null : (req, message) => { if (isCredentialFailure(message)) { bump('authFail'); reportAuthFail(clientIp(req)); } },
     socks5Whitelist: whitelistCache,
     preferSocketConnect: preferSockets(env),
+    // 出站端口守卫：两条连接路径（fetcher / 备用）都先过这里再建立 TCP
+    connectGuardHook: PORT_GUARD_OFF(env) ? null : outboundPortGuard,
   });
   // 没有 request.fetcher（或要求优先用 sockets）时才去加载 cloudflare:sockets，正常情况零开销
   if (!hasFetcher(request) || preferSockets(env)) {

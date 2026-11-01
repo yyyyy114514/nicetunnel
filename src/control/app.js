@@ -112,7 +112,14 @@ export async function handleMain({ request, env, ctx, url, identity }) {
   };
   const notFound = () => camouflage(request, url, env.URL || 'nginx');
   // 订阅以外的路径都可能要校验后台 cookie：先取签名密钥（isolate 内缓存 1 小时）
-  if (lower !== 'sub' && adminLogin) appCtx.authSecret = await store.getAuthSecret();
+  if (lower !== 'sub' && adminLogin) {
+    appCtx.authSecret = await store.getAuthSecret();
+    // 带了 cookie 却校验不过：可能是首次部署时的密钥竞态，重新读一次 KV 再试
+    if (/(?:^|;\s*)auth=/.test(request.headers.get('Cookie') || '') && !isAuthed(appCtx)) {
+      const fresh = await store.getAuthSecret({ refresh: true });
+      if (fresh && fresh !== appCtx.authSecret) appCtx.authSecret = fresh;
+    }
+  }
   // 隐藏入口下只有带正确 Bearer 令牌的脚本才能绕过伪装（随便带个 Authorization 头不行，否则会暴露后台存在）
   const bearerOk = () => { const t = bearerToken(request); return !!t && !!adminLogin && safeEqual(t, adminLogin); };
   if (hidden && lower !== 'sub') {

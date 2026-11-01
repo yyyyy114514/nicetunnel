@@ -97,7 +97,8 @@ test('refreshRulesStep：每步限量拉取，内容不变不重复写；块拼�
   const st = await getRulesStatus({ store });
   assert.equal(st.lists.length, 2);
   assert.ok(st.lists.every((l) => l.ok));
-  assert.ok(kv.m.has(RULES_KEYS.list(listHash('https://r.test/direct.list'))));
+  const direct = parseIni(INI_TEXT).rulesets.find((r) => r.source.value === 'https://r.test/direct.list');
+  assert.ok(kv.m.has(RULES_KEYS.list(listHash('https://r.test/direct.list', direct.source.format))));
 });
 
 test('loadRules：无缓存时用内置 INI 并回退 provider，不写 KV；后台拉取 INI 到内存', async () => {

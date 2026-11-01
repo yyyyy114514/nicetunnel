@@ -125,7 +125,10 @@ export function buildNodeSpecs({ custom, random, settings, uuid, deps = {} }) {
     const port = Number(e.port) || 443;
     let remark = e.remark || '';
     let path = normalPath, chain;
-    const c = resolveChain(remark, { uuid, zeroRtt, deps });
+    // 优选订阅只提供 CF 入口 IP，来自第三方：不解析备注里的链式指令（否则一行 `IP#名$socks5://…@攻击者:端口`
+    // 就能让用户流量改走别人的代理）。指令部分从名字里去掉
+    if (e.best && remark.includes('$')) remark = remark.slice(0, remark.indexOf('$')).trim();
+    const c = e.best ? null : resolveChain(remark, { uuid, zeroRtt, deps });
     if (c) ({ path, remark, chain } = c);
     else if (proxyPool.has(e.address)) path = proxyIpPath(basePath, proxyPool.get(e.address), zeroRtt);
     const key = `${e.address}|${port}|${path}`;

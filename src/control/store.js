@@ -199,11 +199,23 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
     const b = crypto.getRandomValues(new Uint8Array(32));
     const s = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     await rawPut(KEYS.authKey, s);
-    return s;
+    // 首次部署时几个实例可能同时生成各自的密钥；写完读回一次，以 KV 里最终那份为准
+    const back = await kv.get(KEYS.authKey).catch(() => null);
+    return typeof back === 'string' && /^[0-9a-f]{32,}$/.test(back) ? back : s;
   }
-  /** 没绑定 KV 或读写失败时返回 ''（调用方退回推导的密钥） */
-  async function getAuthSecret() {
+  let authRefreshAt = 0;
+  /**
+   * 没绑定 KV 或读写失败时返回 ''（调用方退回推导的密钥）。
+   * refresh=true：cookie 校验失败时重新读一次 KV（每个实例 30 秒最多一次）——首次部署的竞态下，
+   * 本实例缓存的可能是被别的实例覆盖掉的那份密钥
+   */
+  async function getAuthSecret({ refresh = false } = {}) {
     if (!kvBound) return '';
+    if (refresh) {
+      if (now() - authRefreshAt < 30e3) return '';
+      authRefreshAt = now();
+      memo.delete(KEYS.authKey);
+    }
     try { return await cached(KEYS.authKey, 3600e3, loadAuthSecret); } catch { return ''; }
   }
 

@@ -13,7 +13,8 @@ function makeRequest(behave, order) {
     let push;
     const readable = new ReadableStream({ start(c) { push = (b) => c.enqueue(b); } });
     const writable = new WritableStream({ write() { if (kind === 'good') setTimeout(() => push(new Uint8Array([0x16, 0x03, 0x03])), 20); } });
-    const opened = kind === 'refuse' ? Promise.reject(new Error('refused')) : Promise.resolve();
+    // cfdeny：模拟 Worker 直连 Cloudflare IP 时运行时给的错误
+    const opened = kind === 'refuse' ? Promise.reject(new Error('refused')) : kind === 'cfdeny' ? Promise.reject(new Error('proxy request failed, cannot connect to the specified address')) : Promise.resolve();
     opened.catch(() => {});
     return { opened, readable, writable, closed: new Promise(() => {}), close() {} };
   };
@@ -51,7 +52,7 @@ test('补丁里不再有首包等待', async () => {
 
 test('走过反代的目标：下一条连接跳过直连，直接走反代（CF 网站每条连接省一次失败的直连）', async () => {
   const raw = [];
-  const req = makeRequest({ '9.9.9.9': 'good', '8.8.8.8': 'good' }, raw);
+  const req = makeRequest({ '9.9.9.9': 'good', '8.8.8.8': 'good', 'shop.cf-hosted.example': 'cfdeny' }, raw);
   const go = () => forward('shop.cf-hosted.example', 443, TLS_HELLO, { readyState: WebSocket.OPEN }, null, {}, UUID, req, { 反代IP: '9.9.9.9:443,8.8.8.8:443', 代理类型: null, 反代兜底: false }, false, null, true);
   await go();
   const first = raw.splice(0);

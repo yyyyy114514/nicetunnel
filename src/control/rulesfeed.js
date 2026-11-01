@@ -31,7 +31,8 @@ const RENAME = { surge: { 'DST-PORT': 'DEST-PORT', 'SRC-IP-CIDR': 'SRC-IP' }, cl
 // 会破坏 YAML 普通标量的字符（这类规则本身也基本非法，直接丢弃）
 const YAML_RISKY = /: |\s#|["'{}[\]`]|^[-?:,&*!|>%@]/;
 
-export const listHash = (url) => iniHash('list|' + url);
+// 按格式 + URL 区分：同一个 URL 在 INI 里以不同格式出现时，规范化结果不能共用
+export const listHash = (url, format = '') => iniHash('list|' + (format ? format + '|' : '') + url);
 
 // ---------------- isolate 级缓存 ----------------
 const iso = { iniText: new Map(), iniModel: new Map(), provider: new Map(), inflight: null };
@@ -149,8 +150,9 @@ export function inlineRule(fmt, value, group, ctx) {
 /** sing-box 规则里的组名替换：DIRECT→direct，REJECT→action:reject */
 function sbOutbound(text, group) {
   if (!text) return '';
-  if (group === 'REJECT' || group.startsWith('REJECT-')) return text.replaceAll(`"outbound":"${G}"`, '"action":"reject"');
-  return text.replaceAll(G, group === 'DIRECT' ? 'direct' : JSON.stringify(group).slice(1, -1));
+  if (group === 'REJECT' || group.startsWith('REJECT-')) return text.replaceAll(`"outbound":"${G}"`, () => '"action":"reject"');
+  const name = group === 'DIRECT' ? 'direct' : JSON.stringify(group).slice(1, -1);
+  return text.replaceAll(G, () => name); // 用函数：组名里的 $& $$ 不能被当成替换序列
 }
 
 function providerFormat(url) {
@@ -166,7 +168,7 @@ function providerRule(fmt, rs, idx, settings, acc) {
   const url = mirrored(rs.source.value, settings?.rules?.providerMirror);
   const g = groupName(fmt, rs.group);
   if (fmt === 'clash') {
-    const name = `r${idx}-${listHash(rs.source.value).slice(0, 6)}`;
+    const name = `r${idx}-${listHash(rs.source.value, rs.source.format).slice(0, 6)}`;
     acc.providers.push({ name, url, behavior: rs.source.format, format: providerFormat(url), interval: rs.source.interval || 86400 });
     return `RULE-SET,${name},${g}`;
   }
@@ -174,7 +176,7 @@ function providerRule(fmt, rs, idx, settings, acc) {
   // sing-box 只能引用 .srs / .json 规则集；普通 .list 无法使用
   const p = url.split('?')[0].toLowerCase();
   if (!p.endsWith('.srs') && !p.endsWith('.json')) { acc.skipped++; return ''; }
-  const tag = `r${idx}-${listHash(rs.source.value).slice(0, 6)}`;
+  const tag = `r${idx}-${listHash(rs.source.value, rs.source.format).slice(0, 6)}`;
   acc.ruleSets.set(tag, { type: 'remote', tag, format: p.endsWith('.srs') ? 'binary' : 'source', url, download_detour: 'direct' });
   return sbOutbound(JSON.stringify({ rule_set: tag, outbound: G }), rs.group);
 }
@@ -200,9 +202,9 @@ export function assembleBlock(ini, fmt, lists, settings) {
     let piece = '';
     if (rs.source.type === 'inline') piece = inlineRule(fmt, rs.source.value, rs.group, acc);
     else {
-      const doc = lists?.get(listHash(rs.source.value));
+      const doc = lists?.get(listHash(rs.source.value, rs.source.format));
       if (doc && typeof doc[fmt] === 'string') {
-        piece = fmt === 'singbox' ? sbOutbound(doc.singbox, rs.group) : doc[fmt].replaceAll(G, groupName(fmt, rs.group));
+        piece = fmt === 'singbox' ? sbOutbound(doc.singbox, rs.group) : doc[fmt].replaceAll(G, () => groupName(fmt, rs.group));
       } else {
         if (lists) complete = false;
         piece = providerRule(fmt, rs, idx, settings, acc);
@@ -324,12 +326,12 @@ export async function refreshRulesStep({ store, settings, fetchFn = globalThis.f
   index.lists ||= {}; index.built ||= {};
   let indexDirty = false, listsChanged = false;
   const isStale = (e) => !e || (e.ok === false ? now - e.fetchedAt > 30 * 60e3 : now - e.fetchedAt > maxAge);
-  const stale = urls.filter((u) => isStale(index.lists[listHash(u.url)]))
-    .sort((a, b) => (index.lists[listHash(a.url)]?.fetchedAt || 0) - (index.lists[listHash(b.url)]?.fetchedAt || 0));
+  const stale = urls.filter((u) => isStale(index.lists[listHash(u.url, u.format)]))
+    .sort((a, b) => (index.lists[listHash(a.url, a.format)]?.fetchedAt || 0) - (index.lists[listHash(b.url, b.format)]?.fetchedAt || 0));
   for (const u of stale) {
     if (budget <= 0) break;
     budget--;
-    const h = listHash(u.url);
+    const h = listHash(u.url, u.format);
     const prev = index.lists[h];
     try {
       const raw = await fetchText(fetchFn, u.url, MAX_LIST_BYTES);
@@ -347,15 +349,15 @@ export async function refreshRulesStep({ store, settings, fetchFn = globalThis.f
     }
     indexDirty = true;
   }
-  res.pending = urls.filter((u) => isStale(index.lists[listHash(u.url)])).length;
+  res.pending = urls.filter((u) => isStale(index.lists[listHash(u.url, u.format)])).length;
 
   // 3) 拼装（列表或 INI 变化时）
   // 签名里带上"块格式版本"：升级程序后（块里多了 yaml 等字段）第一次刷新会自动重建所有规则块，不用手动清缓存
-  const listsSig = hash32(urls.map((u) => index.lists[listHash(u.url)]?.sig || '-').join('|')).toString(16) + 'f' + BLOCK_FMT;
+  const listsSig = hash32(urls.map((u) => index.lists[listHash(u.url, u.format)]?.sig || '-').join('|')).toString(16) + 'f' + BLOCK_FMT;
   if (listsChanged || index.built[ini.hash] !== listsSig) {
     const lists = new Map();
-    const docs = await Promise.all(urls.map((u) => (index.lists[listHash(u.url)]?.sig ? store.getJson(RULES_KEYS.list(listHash(u.url)), BLOCK_TTL) : null)));
-    urls.forEach((u, i) => { if (docs[i]) lists.set(listHash(u.url), docs[i]); });
+    const docs = await Promise.all(urls.map((u) => (index.lists[listHash(u.url, u.format)]?.sig ? store.getJson(RULES_KEYS.list(listHash(u.url, u.format)), BLOCK_TTL) : null)));
+    urls.forEach((u, i) => { if (docs[i]) lists.set(listHash(u.url, u.format), docs[i]); });
     for (const fmt of RULE_FORMATS) {
       const b = assembleBlock(ini, fmt, lists, settings);
       await store.putJson(RULES_KEYS.block(fmt, ini.hash), { ...b, builtAt: now }, BLOCK_TTL);
@@ -365,7 +367,7 @@ export async function refreshRulesStep({ store, settings, fetchFn = globalThis.f
     res.built = true;
   }
   // 清理已不在 INI 里的列表索引（KV 里的列表文档留着无害）
-  const keep = new Set(urls.map((u) => listHash(u.url)));
+  const keep = new Set(urls.map((u) => listHash(u.url, u.format)));
   for (const h of Object.keys(index.lists)) if (!keep.has(h)) { delete index.lists[h]; indexDirty = true; }
   if (indexDirty) await store.putJson(RULES_KEYS.index, index, BLOCK_TTL);
   return res;

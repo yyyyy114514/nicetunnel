@@ -94,7 +94,7 @@
   {
     "label": "备用 TCP 连接器：没有 request.fetcher（如部分 Pages 项目）时改用 cloudflare:sockets connect()",
     "search": "\tif (!fetcher || typeof fetcher.connect !== 'function') throw new Error('request.fetcher.connect unavailable');",
-    "replace": "\tif (备用TCP连接 && (备用TCP连接优先 || !fetcher || typeof fetcher.connect !== 'function')) return (options, init) => init === undefined ? 备用TCP连接(options) : 备用TCP连接(options, init); // [NT-HOOK] 没有 request.fetcher 时用 cloudflare:sockets\n\tif (!fetcher || typeof fetcher.connect !== 'function') throw new Error('request.fetcher.connect unavailable');"
+    "replace": "\tif (备用TCP连接 && (备用TCP连接优先 || !fetcher || typeof fetcher.connect !== 'function')) return 出站连接守卫包裹((options, init) => init === undefined ? 备用TCP连接(options) : 备用TCP连接(options, init)); // [NT-HOOK] 没有 request.fetcher 时用平台套接字接口；守卫先拦截滥用端口\n\tif (!fetcher || typeof fetcher.connect !== 'function') throw new Error('request.fetcher.connect unavailable');\n\treturn 出站连接守卫包裹((options, init) => init === undefined ? fetcher.connect(options) : fetcher.connect(options, init)); // [NT-HOOK] 出站连接先过守卫（滥用防护：拦截易触发举报的出站端口）"
   },
   {
     "label": "SSTP 降 CPU：校验和内联读取并支持初值（伪首部直接累加）",
@@ -220,5 +220,45 @@
     "label": "每请求并发拨号数：直连候选",
     "search": "Array.from({ length: TCP并发拨号数 }, (_, attempt)",
     "replace": "Array.from({ length: 本次TCP并发拨号数 }, (_, attempt)"
+  },
+  {
+    "label": "反代目标记忆：反代失败时忘掉记录并照常试直连",
+    "search": "\t} else if (目标需走反代(host, portNum)) { // [NT-HOOK] 刚确认过要走反代的目标：跳过必然失败的直连，省一次往返和失败等待\n\t\tlog(`[TCP转发] ${host}:${portNum} 近期需走反代，跳过直连`);\n\t\tawait connecttoPry();\n\t\tif (仅建立连接) return remoteConnWrapper.socket;\n\t} else {\n\t\tlet 直连世代 = remoteConnWrapper.generation;",
+    "replace": "\t} else {\n\t\tif (目标需走反代(host, portNum)) { // [NT-HOOK] 刚确认过要走反代的目标：跳过必然失败的直连，省一次往返和失败等待\n\t\t\tlog(`[TCP转发] ${host}:${portNum} 近期需走反代，跳过直连`);\n\t\t\ttry {\n\t\t\t\tawait connecttoPry();\n\t\t\t\treturn 仅建立连接 ? remoteConnWrapper.socket : undefined;\n\t\t\t} catch (err) {\n\t\t\t\t// 反代也连不上（记错了，或反代 IP 挂了）：忘掉这条记录，照常试一次直连。不管路径里有没有关掉反代兜底，\n\t\t\t\t// 都不能让一个目标因为一次记录 10 分钟都连不上\n\t\t\t\t忘记目标需走反代(host, portNum);\n\t\t\t\tlog(`[TCP转发] ${host}:${portNum} 走反代失败，改试直连: ${err?.message || err}`);\n\t\t\t\tif (ws.readyState !== WebSocket.OPEN) throw err;\n\t\t\t}\n\t\t}\n\t\tlet 直连世代 = remoteConnWrapper.generation;"
+  },
+  {
+    "label": "反代目标记忆：直连抛错时只有像\"连不了 CF IP\"的错误才记",
+    "search": "\t\t\t记录目标需走反代(host, portNum); // [NT-HOOK]\n\t\t\tawait connecttoPry();",
+    "replace": "\t\t\tif (疑似CF拒连(err)) 记录目标需走反代(host, portNum); // [NT-HOOK] 超时、被拒之类不记（非 CF 网站偶尔慢一次不能连累所有人 10 分钟）\n\t\t\tawait connecttoPry();"
+  },
+  {
+    "label": "反代目标记忆：忘记记录 / 判断 CF 拒连（函数）",
+    "search": "function 目标需走反代(主机, 端口) {",
+    "replace": "function 忘记目标需走反代(主机, 端口) { 反代目标.delete(String(主机).toLowerCase() + ':' + 端口); }\n/** Worker 直连 Cloudflare 的 IP 时运行时给的错误（\"cannot connect to the specified address\" 之类）；超时、被拒不算 */\nfunction 疑似CF拒连(err) {\n\tconst m = String(err?.message || err || '');\n\treturn /cannot connect to the specified address|proxy request failed|loop detected/i.test(m) && !/timeout|timed out|超时|refused/i.test(m);\n}\nfunction 目标需走反代(主机, 端口) {"
+  },
+  {
+    "label": "出站端口守卫：按目标端口统一检查（链式代理与 SSTP 也拦）",
+    "search": "\tconst 本次TCP并发拨号数 = Math.max(1, (反代上下文.TCP并发拨号数 ?? TCP并发拨号数) | 0);",
+    "replace": "\tconst 本次TCP并发拨号数 = Math.max(1, (反代上下文.TCP并发拨号数 ?? TCP并发拨号数) | 0);\n\t// [NT-HOOK] 出站端口守卫按目标端口检查：走 socks5/http/turn 链式代理时目标端口包在代理协议里，走 SSTP 时 TCP 在用户态构造，\n\t// 都不经过 Worker 的直连接口；所有代理目标都从这里进来，在这里统一拦\n\tif (出站连接守卫) 出站连接守卫({ hostname: host, port: portNum });"
+  },
+  {
+    "label": "出站端口守卫：去掉执行不到的旧 return",
+    "search": "fetcher.connect(options, init)); // [NT-HOOK] 出站连接先过守卫（滥用防护：拦截易触发举报的出站端口）\n\treturn (options, init) => init === undefined ? fetcher.connect(options) : fetcher.connect(options, init);\n",
+    "replace": "fetcher.connect(options, init)); // [NT-HOOK] 出站连接先过守卫（滥用防护：拦截易触发举报的出站端口）\n"
+  },
+  {
+    "label": "SSTP 零窗口：不带数据的窗口探测（函数）",
+    "search": "\t\tconst 等待发送窗口 = () => new Promise((resolve, reject) => {",
+    "replace": "\t\t// [NT-HOOK] 零窗口探测：序号用\"下一个序号 - 1\"、不带数据，对端必须回 ACK（带当前窗口），不会丢任何数据\n\t\tlet 上次窗口探测 = 0;\n\t\tconst 发送窗口探测 = () => {\n\t\t\tconst 原序号 = sequenceNumber;\n\t\t\tsequenceNumber = (原序号 - 1) >>> 0;\n\t\t\tconst frame = buildTcpFrame(0x10);\n\t\t\tsequenceNumber = 原序号;\n\t\t\twriter.write(frame).catch(() => { });\n\t\t};\n\t\tconst 等待发送窗口 = () => new Promise((resolve, reject) => {"
+  },
+  {
+    "label": "SSTP 零窗口：只发对端窗口收得下的量，零窗口时探测而不是硬发一段",
+    "search": "\t\t\t\tconst 可发 = inflight === 0 ? Math.max(对端窗口, SSTP_TCP_MSS) : 对端窗口 - inflight;\n\t\t\t\tif (可发 > 0) return resolve(可发);",
+    "replace": "\t\t\t\t// [NT-HOOK] 只发对端窗口收得下的量。之前在途为 0 时照发一个完整 MSS 当探测：对端零窗口时丢掉这段，\n\t\t\t\t// 而这里没有重传，数据永久丢失，60 秒后报 send window stalled 断开\n\t\t\t\tconst 可发 = 对端窗口 - inflight;\n\t\t\t\tif (可发 > 0) return resolve(可发);\n\t\t\t\tif (inflight === 0 && Date.now() - 上次窗口探测 >= 1000) { 上次窗口探测 = Date.now(); 发送窗口探测(); }"
+  },
+  {
+    "label": "反代目标记忆：判断 CF 拒连时看并发拨号的每个错误",
+    "search": "function 疑似CF拒连(err) {\n\tconst m = String(err?.message || err || '');",
+    "replace": "function 疑似CF拒连(err) {\n\t// 并发直连全部失败时是 AggregateError（message 只有 \"All promises were rejected\"），要看里面每个错误\n\tconst m = [err, ...(Array.isArray(err?.errors) ? err.errors : [])].map((e) => String(e?.message || e || '')).join(' | ');"
   }
 ]

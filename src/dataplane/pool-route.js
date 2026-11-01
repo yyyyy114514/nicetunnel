@@ -8,7 +8,7 @@
 // 同时省额度：订阅里条目少 → 客户端测速（每节点 1 次请求）成倍减少。
 import { base64SecretEncode, base64SecretDecode, parseChainAccount, defaultChainPort } from './edt-core.js';
 import { hash32 } from '../lib/rand.js';
-import { parseNodeList } from '../lib/pool-parse.js';
+import { parseNodeList, regexRisk } from '../lib/pool-parse.js';
 import { POOL_ROUTE_V } from './contract.js';
 
 export const POOL_TYPE = 'pool';
@@ -38,8 +38,8 @@ const HEALTH_GOOD_MS = 10 * 60e3; // 成功记录的有效期：期内该节点�
 const HEALTH_MAX = 256;
 // 路径参数由持有 UUID 的人控制：限制列表地址数量 / 长度、正则长度并拒绝嵌套量词（防 ReDoS），缓存条数设上限
 const MAX_LIST_URLS = 4, MAX_URL_LEN = 512, MAX_RE_LEN = 200, MAX_KEYS = 64;
-const NESTED_QUANT = /\([^)]*[+*}][^)]*\)\s*[+*{]/;
-export function unsafeRegex(re) { return re.length > MAX_RE_LEN || NESTED_QUANT.test(re); }
+/** 过滤正则有回溯风险时拒绝（规则见 pool-parse.regexRisk；只认安全子集，而不是猜危险写法） */
+export function unsafeRegex(re) { return re.length > MAX_RE_LEN || !!regexRisk(re); }
 function capMap(m) { while (m.size > MAX_KEYS) m.delete(m.keys().next().value); }
 export function resetPoolRouteState() { cache.clear(); inflight.clear(); health.clear(); meta.clear(); }
 
@@ -258,7 +258,7 @@ export async function resolvePoolRoute(url, uuid, { ip = '', fetchFn = globalThi
   if ((Number(data.v) || 1) > POOL_ROUTE_V) return { url, routed: true, error: '节点站点版本过旧，请更新节点 _worker.js（需要地区路由 v' + data.v + '）' };
   const urls = (Array.isArray(data.u) ? data.u : []).filter((u) => typeof u === 'string' && u.length <= MAX_URL_LEN && /^https?:\/\//i.test(u)).slice(0, MAX_LIST_URLS);
   if (!urls.length || !data.region) return { url, routed: true, error: '地区路由参数无效' };
-  if (typeof data.r === 'string' && unsafeRegex(data.r)) return { url, routed: true, error: '地区路由参数无效（过滤正则过长或含嵌套量词）' };
+  if (typeof data.r === 'string' && unsafeRegex(data.r)) return { url, routed: true, error: '地区路由参数无效（过滤正则过长或有回溯风险）' };
 
   const key = `${data.region}|${data.kind || ''}`;
   const re = data.r || '';

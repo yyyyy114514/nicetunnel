@@ -102,5 +102,5 @@ export function renderSingbox({ outbounds, groups, rules, intervalOf = (x) => Nu
   // 规则块是 Cron 侧预先序列化好的 JSON 片段，直接字符串替换，避免每次请求解析/序列化大对象
   const head = [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }, { ip_is_private: true, outbound: 'direct' }];
   const body = JSON.stringify(head).slice(1, -1) + (rules?.rules ? ',' + rules.rules : '');
-  return JSON.stringify(config, null, 2).replace('"__NT_RULES__"', `[${body}]`);
+  return JSON.stringify(config, null, 2).replace('"__NT_RULES__"', () => `[${body}]`); // 用函数：字符串参数会把 $& $$ 当特殊序列
 }

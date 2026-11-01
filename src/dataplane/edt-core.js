@@ -1,7 +1,7 @@
 // @ts-nocheck
 // ============================================================================
 // 本文件由 scripts/vendor-edt.mjs 自动生成，请勿手改。
-// 来源：cmliu/edgetunnel（GPL-2.0），上游版本 2026-10-08 22:23:27，commit a8ab11125ece9bc27983f609a6359be81b21050c
+// 来源：cmliu/edgetunnel（GPL-2.0），上游版本 2026-10-08 22:23:27，commit dfb5cae2f5360fafb7e680bfb2e2d2cffa030fba
 // 原作者：cmliu、zizifn 及上游贡献者。本文件逐字保留其数据面实现（协议/传输/TLS/链式代理），
 // 仅删去与订阅、后台、用量相关的控制面代码，并在末尾追加 configure() 与导出。
 // 许可证：GNU GPL v2，见仓库根目录 LICENSE 与 NOTICE.md。
@@ -1669,6 +1669,9 @@ async function SSAEAD解密(cryptoKey, nonceCounter, ciphertext) {
 async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnWrapper, yourUUID, request = null, 反代上下文 = {}, 允许木马反代 = false, 木马反代首包数据 = null, 仅建立连接 = false) {
 	// [NT-HOOK] 并发拨号数按本次请求者的运营商决定（移动用户单路）。全局变量会被同一实例里后来的请求改写，这里在连接开始时取定
 	const 本次TCP并发拨号数 = Math.max(1, (反代上下文.TCP并发拨号数 ?? TCP并发拨号数) | 0);
+	// [NT-HOOK] 出站端口守卫按目标端口检查：走 socks5/http/turn 链式代理时目标端口包在代理协议里，走 SSTP 时 TCP 在用户态构造，
+	// 都不经过 Worker 的直连接口；所有代理目标都从这里进来，在这里统一拦
+	if (出站连接守卫) 出站连接守卫({ hostname: host, port: portNum });
 	const ctx反代IP = 反代上下文.反代IP || '';
 	let ctx代理类型 = 反代上下文.代理类型 !== undefined ? 反代上下文.代理类型 : null;
 	const ctx代理全局 = 反代上下文.代理全局 !== undefined ? 反代上下文.代理全局 : false;
@@ -2003,11 +2006,20 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			log(`[TCP转发] SOCKS5/HTTP/HTTPS/TURN/SSTP 代理连接失败: ${err.message}`);
 			throw err;
 		}
-	} else if (目标需走反代(host, portNum)) { // [NT-HOOK] 刚确认过要走反代的目标：跳过必然失败的直连，省一次往返和失败等待
-		log(`[TCP转发] ${host}:${portNum} 近期需走反代，跳过直连`);
-		await connecttoPry();
-		if (仅建立连接) return remoteConnWrapper.socket;
 	} else {
+		if (目标需走反代(host, portNum)) { // [NT-HOOK] 刚确认过要走反代的目标：跳过必然失败的直连，省一次往返和失败等待
+			log(`[TCP转发] ${host}:${portNum} 近期需走反代，跳过直连`);
+			try {
+				await connecttoPry();
+				return 仅建立连接 ? remoteConnWrapper.socket : undefined;
+			} catch (err) {
+				// 反代也连不上（记错了，或反代 IP 挂了）：忘掉这条记录，照常试一次直连。不管路径里有没有关掉反代兜底，
+				// 都不能让一个目标因为一次记录 10 分钟都连不上
+				忘记目标需走反代(host, portNum);
+				log(`[TCP转发] ${host}:${portNum} 走反代失败，改试直连: ${err?.message || err}`);
+				if (ws.readyState !== WebSocket.OPEN) throw err;
+			}
+		}
 		let 直连世代 = remoteConnWrapper.generation;
 		try {
 			log(`[TCP转发] 尝试直连到: ${host}:${portNum}`);
@@ -2028,7 +2040,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 				throw err;
 			}
 			if (ws.readyState !== WebSocket.OPEN) throw err;
-			记录目标需走反代(host, portNum); // [NT-HOOK]
+			if (疑似CF拒连(err)) 记录目标需走反代(host, portNum); // [NT-HOOK] 超时、被拒之类不记（非 CF 网站偶尔慢一次不能连累所有人 10 分钟）
 			await connecttoPry();
 			if (仅建立连接) return remoteConnWrapper.socket;
 		}
@@ -2894,9 +2906,9 @@ async function httpsConnect(targetHost, targetPort, initialData, TCP连接, pars
 function 创建请求TCP连接器(request) {
 	const 请求对象 = /** @type {any} */ (request);
 	const fetcher = 请求对象?.fetcher;
-	if (备用TCP连接 && (备用TCP连接优先 || !fetcher || typeof fetcher.connect !== 'function')) return (options, init) => init === undefined ? 备用TCP连接(options) : 备用TCP连接(options, init); // [NT-HOOK] 没有 request.fetcher 时用 cloudflare:sockets
+	if (备用TCP连接 && (备用TCP连接优先 || !fetcher || typeof fetcher.connect !== 'function')) return 出站连接守卫包裹((options, init) => init === undefined ? 备用TCP连接(options) : 备用TCP连接(options, init)); // [NT-HOOK] 没有 request.fetcher 时用平台套接字接口；守卫先拦截滥用端口
 	if (!fetcher || typeof fetcher.connect !== 'function') throw new Error('request.fetcher.connect unavailable');
-	return (options, init) => init === undefined ? fetcher.connect(options) : fetcher.connect(options, init);
+	return 出站连接守卫包裹((options, init) => init === undefined ? fetcher.connect(options) : fetcher.connect(options, init)); // [NT-HOOK] 出站连接先过守卫（滥用防护：拦截易触发举报的出站端口）
 }
 
 const TLS_VERSION_10 = 769, TLS_VERSION_12 = 771, TLS_VERSION_13 = 772;
@@ -3632,7 +3644,7 @@ function isIPHostname(hostname = '') {
 	}
 }
 
-let 链路连接超时毫秒 = 9999; // [NT-HOOK] 原为 const 链路连接超时毫秒 = 9999；nicetunnel 改为可通过 configure({chainConnectTimeoutMs}) 注入（见文件末尾追加段）
+let 链路连接超时毫秒 = 9999; // [NT-HOOK] nicetunnel: 可通过 configure({chainConnectTimeoutMs}) 注入（SSTP/TURN 链路拨号的读写/连接超时）
 
 const TURN_STUN_MAGIC_COOKIE = new Uint8Array([0x21, 0x12, 0xa4, 0x42]);
 
@@ -4268,6 +4280,15 @@ async function sstpConnect(proxy, targetHost, targetPort, TCP连接) {
 		let 对端已确认 = 0, 对端窗口 = 65535, 发送等待 = [], 链路已结束 = null;
 		const 在途字节 = () => (sequenceNumber - 对端已确认) >>> 0;
 		const 唤醒发送 = () => { const list = 发送等待; 发送等待 = []; for (const f of list) f(); };
+		// [NT-HOOK] 零窗口探测：序号用"下一个序号 - 1"、不带数据，对端必须回 ACK（带当前窗口），不会丢任何数据
+		let 上次窗口探测 = 0;
+		const 发送窗口探测 = () => {
+			const 原序号 = sequenceNumber;
+			sequenceNumber = (原序号 - 1) >>> 0;
+			const frame = buildTcpFrame(0x10);
+			sequenceNumber = 原序号;
+			writer.write(frame).catch(() => { });
+		};
 		const 等待发送窗口 = () => new Promise((resolve, reject) => {
 			const 开始 = Date.now();
 			let 定时器 = null;
@@ -4275,8 +4296,11 @@ async function sstpConnect(proxy, targetHost, targetPort, TCP连接) {
 				clearTimeout(定时器);
 				if (链路已结束) return reject(链路已结束);
 				const inflight = 在途字节();
-				const 可发 = inflight === 0 ? Math.max(对端窗口, SSTP_TCP_MSS) : 对端窗口 - inflight;
+				// [NT-HOOK] 只发对端窗口收得下的量。之前在途为 0 时照发一个完整 MSS 当探测：对端零窗口时丢掉这段，
+				// 而这里没有重传，数据永久丢失，60 秒后报 send window stalled 断开
+				const 可发 = 对端窗口 - inflight;
 				if (可发 > 0) return resolve(可发);
+				if (inflight === 0 && Date.now() - 上次窗口探测 >= 1000) { 上次窗口探测 = Date.now(); 发送窗口探测(); }
 				if (Date.now() - 开始 > SSTP发送停滞毫秒) return reject(new Error('SSTP send window stalled'));
 				发送等待.push(check);
 				定时器 = setTimeout(() => { const i = 发送等待.indexOf(check); if (i >= 0) 发送等待.splice(i, 1); check(); }, 1000);
@@ -4998,6 +5022,13 @@ function 记录目标需走反代(主机, 端口) {
 	if (反代目标.size > 2048) 反代目标.clear();
 	反代目标.set(String(主机).toLowerCase() + ':' + 端口, Date.now());
 }
+function 忘记目标需走反代(主机, 端口) { 反代目标.delete(String(主机).toLowerCase() + ':' + 端口); }
+/** Worker 直连 Cloudflare 的 IP 时运行时给的错误（"cannot connect to the specified address" 之类）；超时、被拒不算 */
+function 疑似CF拒连(err) {
+	// 并发直连全部失败时是 AggregateError（message 只有 "All promises were rejected"），要看里面每个错误
+	const m = [err, ...(Array.isArray(err?.errors) ? err.errors : [])].map((e) => String(e?.message || e || '')).join(' | ');
+	return /cannot connect to the specified address|proxy request failed|loop detected/i.test(m) && !/timeout|timed out|超时|refused/i.test(m);
+}
 function 目标需走反代(主机, 端口) {
 	const t = 反代目标.get(String(主机).toLowerCase() + ':' + 端口);
 	return !!t && Date.now() - t < 反代目标有效毫秒;
@@ -5212,22 +5243,26 @@ async function html1101(host, 访问IP) {
 // ---------------------------------------------------------------------------
 // 以下为 nicetunnel 追加（非上游代码）
 // ---------------------------------------------------------------------------
-/** [NT-HOOK] 链式代理拨号结果回调：链路拨号成功/失败时上报 (ok, hostname, port)。由 adapter 注入，供地区路由健康缓存使用；必须在 configure 注入前保持为 null。 */
+/** [NT-HOOK] 链式代理拨号结果回调：链路拨号成功/失败时上报 (ok, hostname, port)。由 adapter 注入，供地区路由健康缓存用；必须在 configure 注入前保持为 null。 */
 let 链路结果钩子 = null;
 /** [NT-HOOK] 地区路由的链路故障转移次数：当前候选拨不通时最多再换几台重试（0=关闭，行为与上游一致）。 */
 let 链路故障转移次数 = 1;
 /** [NT-HOOK] SSTP 竞速拨号路数：地区路由时同时拨几台 SSTP 候选（1=关闭，最多 2）。 */
 let 链路竞速数 = 2;
-/** [NT-HOOK] 首包认证失败回调（UUID/密码不对或首包无法解析）：(request)=>void。由 adapter 注入，用于按 IP 限流。 */
+/** [NT-HOOK] 首包认证失败回调：(request, message)=>void。由 adapter 注入，只对"凭据不符"按 IP 限流。 */
 let 认证失败钩子 = null;
 /** [NT-HOOK] 失败日志钩子：log() 里带「失败 / 超时」的行交给它（节点自报统计用）；未注入时为 null，行为与上游一致。 */
 let 失败日志钩子 = null;
+/** [NT-HOOK] 出站连接守卫：(options)=>void，TCP 建立前调用，抛错即拒绝该连接。由 adapter 注入（滥用防护：拦截易触发举报的出站端口）。 */
+let 出站连接守卫 = null;
+/** [NT-HOOK] 守卫包装：未注入守卫时原样返回连接器；注入后每次连接先过守卫（两条连接路径——fetcher 与备用——都走这里）。 */
+const 出站连接守卫包裹 = (connect) => (!出站连接守卫 ? connect : (options, init) => { 出站连接守卫(options); return init === undefined ? connect(options) : connect(options, init); });
 /** [NT-HOOK] 备用 TCP 连接器（cloudflare:sockets 的 connect）：request.fetcher 不可用时使用；备用TCP连接优先=true 时总是使用。 */
 let 备用TCP连接 = null, 备用TCP连接优先 = false;
 
 /**
  * 注入上游原本在 fetch() 里按环境变量赋值的模块级开关。
- * @param {{debug?:boolean, socks5Whitelist?:string[], tcpConcurrentDial?:number, proxyConcurrentDial?:number, preloadRaceDial?:boolean, chainResultHook?:(ok:boolean, hostname:string, port:number)=>void, chainConnectTimeoutMs?:number, chainFailover?:number, chainRace?:number, authFailHook?:(request:Request, message?:string)=>void, failLogHook?:(line:string)=>void, socketConnect?:(options:any, init?:any)=>any, preferSocketConnect?:boolean}} o
+ * @param {{debug?:boolean, socks5Whitelist?:string[], tcpConcurrentDial?:number, proxyConcurrentDial?:number, preloadRaceDial?:boolean, chainResultHook?:(ok:boolean, hostname:string, port:number)=>void, chainConnectTimeoutMs?:number, chainFailover?:number, chainRace?:number, authFailHook?:(request:Request, message?:string)=>void, failLogHook?:(line:string)=>void, socketConnect?:(options:any, init?:any)=>any, preferSocketConnect?:boolean, connectGuardHook?:(options:any)=>void}} o
  */
 export function configure(o = {}) {
   if (o.debug !== undefined) 调试日志打印 = !!o.debug;
@@ -5243,6 +5278,7 @@ export function configure(o = {}) {
   if (typeof o.failLogHook === 'function') 失败日志钩子 = o.failLogHook; // [NT-HOOK]
   if (typeof o.socketConnect === 'function') 备用TCP连接 = o.socketConnect; // [NT-HOOK]
   if (o.preferSocketConnect !== undefined) 备用TCP连接优先 = !!o.preferSocketConnect; // [NT-HOOK]
+  if (o.connectGuardHook !== undefined) 出站连接守卫 = typeof o.connectGuardHook === 'function' ? o.connectGuardHook : null; // [NT-HOOK]
 }
 
 export {

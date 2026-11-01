@@ -1,5 +1,6 @@
 // 设置的单一事实来源：默认值、合并、清洗、公开视图（脱敏）、从 edgetunnel 旧配置迁移。
 // 全部为纯函数，不碰 KV/网络，便于单测。存储层见 store.js。
+import { regexRisk } from '../lib/pool-parse.js';
 
 export const SCHEMA_VERSION = 5;
 
@@ -254,7 +255,7 @@ export function normalizeSettings(raw) {
   g.enabled = bool(g.enabled, false);
   g.urls = [...new Set(strList(g.urls).filter((x) => /^https?:\/\//i.test(x)))];
   g.regex = str(g.regex);
-  if (g.regex) { try { new RegExp(g.regex, 'u'); } catch { g.regex = ''; } }
+  if (g.regex) { try { new RegExp(g.regex, 'u'); if (regexRisk(g.regex)) g.regex = ''; } catch { g.regex = ''; } }
   g.kinds = [...new Set(strList(g.kinds))];
   g.nameTemplate = str(g.nameTemplate, '【{kind}】{region}');
   if (!g.nameTemplate.includes('{region}')) g.nameTemplate = '【{kind}】{region}';

@@ -15,14 +15,35 @@ export const DEFAULT_REGION_RE = '^(.+?)-(住宅|机房)-\\d+$';
 const CHAIN_RE = /\$?\s*(socks5|http|https|turn|sstp):\/\/([^#\s$]+)/i;
 const ADDR_RE = /^(\[[\da-fA-F:]+\]|[\d.]+|[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*)(?::(\d+))?$/;
 
+const MAX_RE_LEN = 200;
+const MAX_UNBOUNDED = 3;
+/** 节点名称参与正则匹配的最大长度（名称本来就短；限制长度让最坏情况的回溯也有上限） */
+export const MAX_REGION_NAME_LEN = 96;
+
+/**
+ * 地区正则的风险检查（主站保存设置、节点解析路径参数都用它）。返回原因，安全时返回 ''。
+ * 不靠认"危险写法"（总有绕过，例如 ((a+))+ 、(a|a)+），而是只允许一个安全子集：
+ * 分组后面不能跟 * + {n,m}（可选的 ? 可以）；不能有反向引用；不限次数的量词（* + {n,}）最多 3 个。
+ * 这样不会有指数级回溯；多项式回溯再配合名称长度上限，最坏也只是毫秒级。
+ */
+export function regexRisk(src) {
+  const s = String(src || '');
+  if (s.length > MAX_RE_LEN) return '过长';
+  if (/\\[1-9]|\\k</.test(s)) return '含反向引用';
+  const flat = s.replace(/\\./g, 'E').replace(/\[(?:\\.|[^\]\\])*\]/g, 'C');
+  if (/\)\s*(?:[*+]|\{\d*,?\d*\})/.test(flat)) return '分组后面不能跟 * + {n,m}';
+  if ((flat.match(/[*+]|\{\d+,\}/g) || []).length > MAX_UNBOUNDED) return `不限次数的量词超过 ${MAX_UNBOUNDED} 个`;
+  return '';
+}
+
 const reCache = new Map();
-/** 编译地区正则；非法返回 null（调用方回退到通用规则） */
+/** 编译地区正则；非法或有回溯风险返回 null（调用方回退到通用规则） */
 export function compileRegionRe(src) {
   const s = String(src || '').trim();
   if (!s) return null;
   if (reCache.has(s)) return reCache.get(s);
   let re = null;
-  try { re = new RegExp(s, 'u'); } catch { re = null; }
+  if (!regexRisk(s)) { try { re = new RegExp(s, 'u'); } catch { re = null; } }
   if (reCache.size > 8) reCache.clear();
   reCache.set(s, re);
   return re;
@@ -30,7 +51,7 @@ export function compileRegionRe(src) {
 
 /** 名称 → {region, kind}；提不出返回 null */
 export function extractRegion(name, regionRe) {
-  const s = String(name || '').trim();
+  const s = String(name || '').trim().slice(0, MAX_REGION_NAME_LEN);
   if (!s) return null;
   const re = compileRegionRe(regionRe);
   if (re) {
