@@ -86,7 +86,7 @@ export function renderSubscription({ format, nodes, ctx, ini, rules }) {
       entries.push({ name: settings?.sub?.appendType ? `[${l.type.toUpperCase()}] ${n.name}` : n.name, link: l });
     } else if (n.address) {
       const d = toProxyDescriptor(n, c);
-      entries.push({ name: nameOf(d), desc: d, cf: n.origin === 'random' || n.origin === 'best' });
+      entries.push({ name: nameOf(d), desc: d, cf: n.origin === 'random' || n.origin === 'best', tags: n.tags || [] });
     }
   }
   // 2) 名字唯一化（与组名/内置策略不冲突）
@@ -109,7 +109,7 @@ export function renderSubscription({ format, nodes, ctx, ini, rules }) {
     const proxies = [];
     entries.forEach((e, i) => {
       const obj = e.desc ? clashProxy(e.desc, names[i]) : clashProxyFromLink(e.link, names[i]);
-      if (obj) proxies.push({ name: names[i], obj, desc: e.desc, cf: e.cf });
+      if (obj) proxies.push({ name: names[i], obj, desc: e.desc, cf: e.cf, tags: e.tags || [] });
       else warnings.push(`Clash 不支持的节点已跳过：${names[i]}`);
     });
     let groups = withTol(resolveGroups(model, proxies.map((p) => p.name), warnings, { hide: hideOf(proxies) }));

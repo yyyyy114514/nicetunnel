@@ -133,9 +133,13 @@ export async function loadHome(store) {
  * @param {{name:string, type:string, proxies:string[]}[]} groups
  */
 export function addHomeToClash(home, proxies, groups) {
-  // 前置只用本项目的 TLS 节点：OpenVPN 的握手特征很明显，套在明文节点里等于裸奔
-  let front = proxies.filter((p) => p.desc && p.obj?.tls === true).map((p) => p.name);
-  if (!front.length) front = proxies.filter((p) => p.desc).map((p) => p.name);
+  // 前置只用本项目的普通 TLS 节点：
+  // - 不用明文节点：OpenVPN 的握手特征很明显，套在明文节点里等于裸奔；
+  // - 不用地区路由 / 链式条目：它们自己要在 Worker 里再跑一层 SSTP，又慢又常挂（实测前置默认选中了一个不通的地区条目，
+  //   导致所有家宽节点全部超时）
+  const plain = (p) => p.desc && !(p.tags || []).some((t) => t === 'region' || t === 'chain');
+  let front = proxies.filter((p) => plain(p) && p.obj?.tls === true).map((p) => p.name);
+  if (!front.length) front = proxies.filter(plain).map((p) => p.name);
   if (!front.length) return { proxies, groups, added: 0 };
   const seen = new Map();
   const sorted = home.entries.slice().sort((a, b) => a.cc.localeCompare(b.cc) || b.score - a.score);
@@ -152,7 +156,8 @@ export function addHomeToClash(home, proxies, groups) {
   const homeGroups = [
     { name: AUTO, type: 'fallback', proxies: names, url: 'http://www.gstatic.com/generate_204', interval: 300 },
     { name: PICK, type: 'select', proxies: names },
-    { name: FRONT, type: 'select', proxies: front },
+    // 前置自动选延迟最低的可用节点：手动选择组默认用第一个，那个节点不通时所有家宽节点都会超时
+    { name: FRONT, type: 'url-test', proxies: front, url: 'http://www.gstatic.com/generate_204', interval: 300, tolerance: 50 },
   ];
   const firstSelect = groups.findIndex((g) => g.type === 'select');
   const next = groups.map((g, i) => (i === firstSelect ? { ...g, proxies: [AUTO, PICK, ...g.proxies.filter((x) => x !== AUTO && x !== PICK)] } : g));
