@@ -178,11 +178,17 @@ export async function setupAccount({ account, cfId, fetchFn, now, prev = {}, red
     }
     if (!proj) return { ...meta, manual: true, err: '没找到承载这个账号域名的 Pages 项目（Worker 部署的节点需要手动绑定）' };
     meta.project = proj.name;
+    // 先确认这个账号能用 Analytics Engine：没开通 AE 时项目带着 AE 绑定，之后每次部署都会失败
+    // （"You need to enable Analytics Engine"），节点再也更新不了。查不了就只加 KV 绑定：封禁照常生效，
+    // 只是这个账号的在线统计和并行限制不生效
+    const ae = await aeQuery(fetchFn, account, cfId, ONLINE_SQL);
+    meta.aeMissing = !ae.ok;
+    meta.aeErr = ae.ok ? '' : String(ae.error || '').slice(0, 200);
     // 把项目原有的同类绑定一起带上：不管这个接口是合并还是整段替换，都不会覆盖掉别的 KV / AE 绑定
     const prod = proj.deployment_configs?.production || {};
     const patch = { deployment_configs: { production: {
       kv_namespaces: { ...(prod.kv_namespaces || {}), [MU_KV_BINDING]: { namespace_id: meta.nsId } },
-      analytics_engine_datasets: { ...(prod.analytics_engine_datasets || {}), [MU_AE_BINDING]: { dataset: MU_DATASET } },
+      ...(ae.ok ? { analytics_engine_datasets: { ...(prod.analytics_engine_datasets || {}), [MU_AE_BINDING]: { dataset: MU_DATASET } } } : {}),
     } } };
     const up = await cfApi(fetchFn, account, 'PATCH', `/accounts/${cfId}/pages/projects/${encodeURIComponent(proj.name)}`, patch);
     if (!up.ok) return { ...meta, manual: true, err: '添加绑定失败：' + up.error + permHint(up, 'Cloudflare Pages: Edit') };
@@ -190,19 +196,47 @@ export async function setupAccount({ account, cfId, fetchFn, now, prev = {}, red
     meta.boundAt = now;
     meta.manual = false;
     meta.deployId = proj.canonical_deployment?.id || proj.latest_deployment?.id || '';
+    meta.bindDeployId = meta.deployId; // 加绑定时的生产部署：之后正式部署换成别的，说明重新部署过了
     meta.directUpload = !proj.source?.type; // 没有 Git 来源 = 直接上传部署
+  }
+  const projPath = `/accounts/${cfId}/pages/projects/${encodeURIComponent(meta.project || '')}`;
+  // 2b) 之前因为账号没开通 AE 没加 NT_AE：再探测一次，能用了就补上（补上后要再部署一次才生效）
+  if (meta.bound && meta.aeMissing && meta.project) {
+    const ae = await aeQuery(fetchFn, account, cfId, ONLINE_SQL);
+    if (ae.ok) {
+      const pj = await cfApi(fetchFn, account, 'GET', projPath);
+      const add = await cfApi(fetchFn, account, 'PATCH', projPath, { deployment_configs: { production: { analytics_engine_datasets: { [MU_AE_BINDING]: { dataset: MU_DATASET } } } } });
+      if (add.ok) { meta.aeMissing = false; meta.aeErr = ''; meta.redeployed = false; meta.bindDeployId = pj.json?.result?.canonical_deployment?.id || meta.deployId || ''; }
+    }
   }
   // 3) 绑定要重新部署才生效
   if (redeploy && meta.bound && meta.project && !meta.redeployed) {
-    if (!meta.boundAt) meta.boundAt = now; // 旧记录没有加绑定的时间：从现在算
-    // 加绑定之后已经有了新的生产部署（例如管理员重新上传了节点包）：绑定已生效，直接算完成
-    const pj = await cfApi(fetchFn, account, 'GET', `/accounts/${cfId}/pages/projects/${encodeURIComponent(meta.project)}`);
-    if (pj.ok) {
-      const cur = pj.json?.result?.canonical_deployment;
-      if (pj.json?.result?.name) meta.directUpload = !pj.json.result.source?.type;
-      const at = Date.parse(cur?.created_on || '');
-      if (cur?.id && at > meta.boundAt && cur.latest_stage?.status !== 'failure') { meta.redeployed = true; meta.blocked = false; meta.deployId = cur.id; return meta; }
+    // 旧记录没有"加绑定时的生产部署"：用记下的 deployId（旧版在加绑定时记的就是当时的生产部署）
+    if (!meta.bindDeployId) meta.bindDeployId = meta.deployId || '';
+    const pj = await cfApi(fetchFn, account, 'GET', projPath);
+    if (pj.ok && pj.json?.result?.name) {
+      const r = pj.json.result;
+      const cur = r.canonical_deployment;
+      meta.directUpload = !r.source?.type;
+      // 正式生产部署已经换成加绑定之后的新部署：绑定已生效
+      if (cur?.id && meta.bindDeployId && cur.id !== meta.bindDeployId && cur.latest_stage?.status !== 'failure') { meta.redeployed = true; meta.blocked = false; meta.deployId = cur.id; meta.err = ''; return meta; }
       if (cur?.id) meta.deployId = cur.id;
+      // 最近一次部署失败（没成为正式部署）：把失败原因读出来，而不是一直让管理员"再上传一次"
+      const lat = r.latest_deployment;
+      const failed = lat?.id && lat.id !== cur?.id && (lat.latest_stage?.status === 'failure' || (lat.stages || []).some((s) => s.status === 'failure'));
+      if (failed) {
+        const lg = await cfApi(fetchFn, account, 'GET', `${projPath}/deployments/${lat.id}/history/logs`);
+        const lines = (lg.json?.result?.data || []).map((l) => String(l.line || ''));
+        const errLine = lines.reverse().find((l) => /error/i.test(l)) || '';
+        if (/enable Analytics Engine/i.test(errLine)) {
+          // 账号没开通 AE：去掉 NT_AE 绑定，让部署能成功（封禁照常生效；开通 AE 后再点一次自动配置会加回）
+          const rm = await cfApi(fetchFn, account, 'PATCH', projPath, { deployment_configs: { production: { analytics_engine_datasets: { [MU_AE_BINDING]: null } } } });
+          if (!rm.ok) return { ...meta, aeMissing: true, err: '上次部署失败：这个账号没开通 Analytics Engine。自动去掉 NT_AE 绑定也失败了（' + rm.error + '）：请在 Pages 设置 → 绑定里删掉 NT_AE，或者在 Cloudflare 控制台开通 Analytics Engine，然后重新上传一次' };
+          return { ...meta, aeMissing: true, aeErr: '账号未开通 Analytics Engine', err: '上次部署失败：这个账号没开通 Analytics Engine（带着 NT_AE 绑定部署会失败）。已去掉 NT_AE 绑定，请再上传一次节点包，然后再点「自动配置」。'
+            + '封禁照常生效，但这个账号的在线统计和并行限制不生效；想要的话在 Cloudflare 控制台 Workers → Analytics Engine 开通后再点「自动配置」' };
+        }
+        if (errLine) return { ...meta, err: '上次部署失败，Cloudflare 的错误：' + errLine.slice(0, 240) };
+      }
     }
     if (!meta.deployId) return { ...meta, err: '绑定已添加，但项目还没有部署：请在 Cloudflare 控制台部署一次' };
     // 直接上传的项目 Cloudflare 不允许用 API 重试（只有 Git 构建可以），只能重新上传一次代码

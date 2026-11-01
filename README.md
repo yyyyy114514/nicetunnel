@@ -172,6 +172,7 @@ npm run build -- --no-extras       # zip 里只放 _worker.js
      `CF_API_TOKEN=<节点账号 Token> node scripts/deploy-node.mjs --account <AccountID> --host <节点域名> --file dist/_worker.js`（节点上部署的是哪个包就传哪个：全量包 `dist/_worker.js` 或纯节点包 `dist/_worker.node.js`）。
      上传完再点一次「自动配置」，会自动检测到新部署并变为就绪。
    - 项目被 Cloudflare 封禁（abuse）时会标出来，不会再把用户分到这个账号。
+   - **Analytics Engine 要先在每个账号开通一次**（控制台 Workers & Pages → Analytics Engine，免费）。没开通时带着 `NT_AE` 绑定部署会失败（"You need to enable Analytics Engine"）。自动配置会先探测：用不了 AE 就只加 `NT_MU`（封禁照常生效，这个账号没有在线统计和并行限制）；已经因此部署失败的会自动去掉 `NT_AE`。开通后再点一次「自动配置」会补回，再上传一次即可。
 3. 主站 Worker 建议再加一个 Cron 触发器 `* * * * *`（保留 `*/5 * * * *`）：每分钟汇总一次在线情况。不加也能用，最慢 5 分钟同步一次。
 4. 「用户」页 → 批量生成，复制链接发给用户。
 

@@ -231,3 +231,50 @@ test('deploy-node 脚本：按页找项目；部署请求是 multipart，manifes
     assert.equal(await form.get('_worker.js').text(), 'export default {}');
   } finally { globalThis.fetch = realFetch; }
 });
+
+test('自动配置 + Analytics Engine：查不了 AE 就不加 NT_AE；部署因没开通 AE 失败时自动去掉；开通后再点会补回', async () => {
+  const { accountReady } = await import('../src/control/users.js');
+  let aeOk = false;
+  let canonical = { id: 'd-old', latest_stage: { status: 'success' } };
+  let latest = canonical;
+  const patches = [];
+  const fetchFn = async (url, init = {}) => {
+    const u = String(url);
+    const m = init.method || 'GET';
+    const ok = (result) => new Response(JSON.stringify({ success: true, result }));
+    const proj = () => ({ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], canonical_deployment: canonical, latest_deployment: latest, deployment_configs: { production: {} } });
+    if (u.includes('/storage/kv/namespaces?')) return ok([{ id: 'ns1', title: 'nicetunnel-mu' }]);
+    if (u.endsWith('/analytics_engine/sql')) return aeOk ? new Response('{"data":[]}') : new Response('Authorization error', { status: 403 });
+    if (u.includes('/pages/projects?page=1')) return ok([proj()]);
+    if (u.endsWith('/history/logs')) return ok({ data: [{ ts: 'x', line: 'Error: Failed to publish your Function. Got error: You need to enable Analytics Engine. Head to the Cloudflare Dashboard to enable: https://dash.cloudflare.com/x/workers' }] });
+    if (/\/pages\/projects\/p$/.test(u)) { if (m === 'PATCH') { patches.push(JSON.parse(init.body)); return ok({}); } return ok(proj()); }
+    return ok({});
+  };
+  const account = { id: 'a', hosts: ['n1.com'], auth: { apiToken: 't'.repeat(40) } };
+  // 1) AE 查不了：只加 KV 绑定
+  const m1 = await setupAccount({ account, cfId: HEX(1), fetchFn, now: 1 });
+  assert.equal(m1.aeMissing, true);
+  const prod1 = patches[0].deployment_configs.production;
+  assert.ok(prod1.kv_namespaces.NT_MU);
+  assert.equal(prod1.analytics_engine_datasets, undefined, '不加 NT_AE');
+  assert.equal(accountReady(m1), false);
+  // 2) 旧版已经加了 NT_AE、部署因没开通 AE 失败：读日志、去掉 NT_AE、提示再上传
+  latest = { id: 'd-fail', latest_stage: { status: 'failure' } };
+  const m2 = await setupAccount({ account, cfId: HEX(1), fetchFn, now: 2, prev: { nsId: 'ns1', bound: true, project: 'p', deployId: 'd-old', directUpload: true } });
+  assert.match(m2.err, /没开通 Analytics Engine/);
+  assert.deepEqual(patches.at(-1).deployment_configs.production.analytics_engine_datasets, { NT_AE: null });
+  // 3) 再上传一次：正式部署换成新的 → 就绪（判断不依赖点击时间）
+  canonical = { id: 'd-new', latest_stage: { status: 'success' } };
+  latest = canonical;
+  const m3 = await setupAccount({ account, cfId: HEX(1), fetchFn, now: 3, prev: m2 });
+  assert.equal(m3.redeployed, true);
+  assert.equal(accountReady(m3), true);
+  // 4) 开通 AE 后再点：补上 NT_AE，需要再部署一次
+  aeOk = true;
+  const n = patches.length;
+  const m4 = await setupAccount({ account, cfId: HEX(1), fetchFn, now: 4, prev: m3 });
+  assert.deepEqual(patches[n].deployment_configs.production.analytics_engine_datasets, { NT_AE: { dataset: 'nicetunnel_mu' } });
+  assert.equal(m4.aeMissing, false);
+  assert.equal(m4.redeployed, false);
+  assert.equal(m4.bindDeployId, 'd-new');
+});

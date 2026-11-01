@@ -519,10 +519,11 @@ function clientMain() {
         : a.ready ? (a.pushed ? '<span class="pill p-ok">就绪</span>' : '<span class="pill p-low">已绑定，待下发</span>')
         : m.nsId && m.bound ? '<span class="pill p-low">已绑定，待重新部署</span>'
         : m.nsId ? '<span class="pill p-low">缺绑定</span>' : '<span class="pill p-stale">未配置</span>';
+      const aeNote = m.aeMissing ? ' <span class="pill p-low" title="' + h('这个账号不能用 Analytics Engine（' + (m.aeErr || '未开通或 Token 缺 Account Analytics: Read') + '）：封禁照常生效，在线统计和并行限制对它不生效') + '">无在线统计</span>' : '';
       const err = (m.err || a.error) ? '<div class="mut" style="white-space:normal;color:var(--bad)">' + h(m.err || a.error) + '</div>' : '';
       // 没自动绑定上、或绑定上了但重新部署没成功：都可以手动完成后勾选
       const manual = m.nsId && !m.blocked && !(m.bound && m.redeployed) ? '<label class="chk" style="margin-left:6px"><input type="checkbox" data-mbound="' + h(a.id) + '" ' + (m.manualBound ? 'checked' : '') + '> ' + (m.bound ? '已手动重新部署' : '已手动绑定并部署') + '</label>' : '';
-      return '<tr><td>' + h(a.name) + (a.enabled ? '' : ' <span class="tag">未启用</span>') + '</td><td class="mono">' + h(a.cfId ? a.cfId.slice(0, 8) + '…' : '未知') + '</td><td style="white-space:normal;min-width:220px">' + st + (m.project ? ' <span class="mut">Pages：' + h(m.project) + '</span>' : '') + manual + err + '</td>'
+      return '<tr><td>' + h(a.name) + (a.enabled ? '' : ' <span class="tag">未启用</span>') + '</td><td class="mono">' + h(a.cfId ? a.cfId.slice(0, 8) + '…' : '未知') + '</td><td style="white-space:normal;min-width:220px">' + st + (m.project ? ' <span class="mut">Pages：' + h(m.project) + '</span>' : '') + aeNote + manual + err + '</td>'
         + '<td><button class="btn sm" data-setup="' + h(a.id) + '">' + (a.ready ? '重新配置' : '自动配置') + '</button> <button class="btn sm" data-msetup-reset="' + h(a.id) + '">重置</button></td></tr>';
     }).join('');
     const readyN = d.accounts.filter((a) => a.ready).length;
