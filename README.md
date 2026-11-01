@@ -168,6 +168,10 @@ npm run build -- --no-extras       # zip 里只放 _worker.js
 
 1. 后台「系统」→ 多用户专属链接：勾 **开启多用户**，设默认并行数（默认 2，0 = 不限）。左侧出现「用户」页。
 2. 「用户」页 → 节点账号配置：每个节点账号点 **自动配置**。它会用账号的 Token 建 KV 命名空间 `nicetunnel-mu`、给 Pages 项目加绑定 `NT_MU`（KV）和 `NT_AE`（Analytics Engine，数据集 `nicetunnel_mu`）并重新部署。Token 需要 **Workers KV Storage: Edit**、**Cloudflare Pages: Edit**、**Account Analytics: Read**。自动配置失败时按这些名字在 Pages「设置 → 绑定」里手动加，重新部署，再勾「已手动绑定」。节点代码要用这一版（能力 `multi-user@1`）。
+   - **直接上传的项目**（控制台上传 zip 部署的，最常见）：Cloudflare 不允许用 API 重试这类部署，绑定加好后要再上传一次代码才生效。在 Pages 控制台重新上传节点包，或者在本机运行：
+     `CF_API_TOKEN=<节点账号 Token> node scripts/deploy-node.mjs --account <AccountID> --host <节点域名> --file dist/_worker.js`（节点上部署的是哪个包就传哪个：全量包 `dist/_worker.js` 或纯节点包 `dist/_worker.node.js`）。
+     上传完再点一次「自动配置」，会自动检测到新部署并变为就绪。
+   - 项目被 Cloudflare 封禁（abuse）时会标出来，不会再把用户分到这个账号。
 3. 主站 Worker 建议再加一个 Cron 触发器 `* * * * *`（保留 `*/5 * * * *`）：每分钟汇总一次在线情况。不加也能用，最慢 5 分钟同步一次。
 4. 「用户」页 → 批量生成，复制链接发给用户。
 

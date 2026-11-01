@@ -115,7 +115,7 @@ test('Pages 绑定：带上项目原有的 KV / AE 绑定，不会被整段替�
     calls.push({ u, m: init.method || 'GET', b: init.body });
     const ok = (result) => new Response(JSON.stringify({ success: true, result }));
     if (u.includes('/storage/kv/namespaces?')) return ok([{ id: 'ns1', title: 'nicetunnel-mu' }]);
-    if (u.includes('/pages/projects?')) return ok([{ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], canonical_deployment: { id: 'd1' },
+    if (u.includes('/pages/projects?')) return ok([{ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], source: { type: 'github' }, canonical_deployment: { id: 'd1' },
       deployment_configs: { production: { kv_namespaces: { OTHER: { namespace_id: 'x' } }, analytics_engine_datasets: { MINE: { dataset: 'y' } } } } }]);
     return ok({});
   };
@@ -135,7 +135,7 @@ test('Pages 项目列表：不带 per_page（CF 会报 400），按页翻到第 
     if (u.includes('/storage/kv/namespaces?')) return ok([{ id: 'ns1', title: 'nicetunnel-mu' }]);
     if (/per_page/.test(u) && u.includes('/pages/projects')) return new Response(JSON.stringify({ success: false, errors: [{ message: 'Invalid list options provided.' }] }), { status: 400 });
     if (u.includes('/pages/projects?page=1')) return ok([{ name: 'other', subdomain: 'other.pages.dev', domains: ['x.com'] }], { page: 1, total_pages: 2 });
-    if (u.includes('/pages/projects?page=2')) return ok([{ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], canonical_deployment: { id: 'd1' } }], { page: 2, total_pages: 2 });
+    if (u.includes('/pages/projects?page=2')) return ok([{ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], source: { type: 'github' }, canonical_deployment: { id: 'd1' } }], { page: 2, total_pages: 2 });
     return ok({});
   };
   const meta = await setupAccount({ account: { id: 'a', hosts: ['n1.com'], auth: { apiToken: 't'.repeat(40) } }, cfId: HEX(1), fetchFn, now: 1 });
@@ -150,7 +150,7 @@ test('自动配置：项目被 Cloudflare 封禁时标记不可用；重新部�
     const u = String(url);
     const ok = (result) => new Response(JSON.stringify({ success: true, result }));
     if (u.includes('/storage/kv/namespaces?')) return ok([{ id: 'ns1', title: 'nicetunnel-mu' }]);
-    if (u.includes('/pages/projects?page=1')) return ok([{ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], canonical_deployment: { id: 'd1' } }]);
+    if (u.includes('/pages/projects?page=1')) return ok([{ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], source: { type: 'github' }, canonical_deployment: { id: 'd1' } }]);
     if (u.endsWith('/retry')) return retry();
     return ok({});
   };
@@ -170,4 +170,64 @@ test('自动配置：项目被 Cloudflare 封禁时标记不可用；重新部�
   // 一切正常
   const good = await setupAccount({ account, cfId: HEX(1), now: 1, fetchFn: mk(() => new Response('{"success":true,"result":{}}')) });
   assert.equal(accountReady(good), true);
+});
+
+test('自动配置：直接上传的项目不去重试（CF 不允许），提示重新上传；上传后再点一次自动检测到新部署变为就绪', async () => {
+  const { accountReady } = await import('../src/control/users.js');
+  let canonical = { id: 'old', created_on: '2026-11-01T04:00:53Z', latest_stage: { status: 'success' } };
+  const calls = [];
+  const fetchFn = async (url, init = {}) => {
+    const u = String(url);
+    const m = init.method || 'GET';
+    calls.push(m + ' ' + u);
+    const ok = (result) => new Response(JSON.stringify({ success: true, result }));
+    // 真实接口：直接上传的项目没有 source 字段；重试返回 400
+    const proj = () => ({ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], canonical_deployment: canonical, deployment_configs: { production: {} } });
+    if (u.includes('/storage/kv/namespaces?')) return ok([{ id: 'ns1', title: 'nicetunnel-mu' }]);
+    if (u.includes('/pages/projects?page=1')) return ok([proj()]);
+    if (u.endsWith('/retry')) return new Response(JSON.stringify({ success: false, errors: [{ message: 'You cannot retry a Direct Upload deployment. Retries are only possible for builds' }] }), { status: 400 });
+    if (/\/pages\/projects\/p$/.test(u)) return ok(m === 'GET' ? proj() : {});
+    return ok({});
+  };
+  const account = { id: 'a', hosts: ['n1.com'], auth: { apiToken: 't'.repeat(40) } };
+  const t1 = Date.parse('2026-11-01T05:00:00Z');
+  const m1 = await setupAccount({ account, cfId: HEX(1), fetchFn, now: t1 });
+  assert.equal(m1.bound, true);
+  assert.equal(m1.directUpload, true);
+  assert.match(m1.err, /重新上传/);
+  assert.ok(!calls.some((c) => c.endsWith('/retry')), '直接上传的项目不去调重试接口');
+  assert.equal(accountReady(m1), false);
+  // 管理员重新上传了节点包：出现比加绑定更晚的生产部署
+  canonical = { id: 'new', created_on: '2026-11-01T05:10:00Z', latest_stage: { status: 'success' } };
+  const m2 = await setupAccount({ account, cfId: HEX(1), fetchFn, now: t1 + 15 * 60e3, prev: m1 });
+  assert.equal(m2.redeployed, true);
+  assert.equal(m2.err, '');
+  assert.equal(accountReady(m2), true);
+});
+
+test('deploy-node 脚本：按页找项目；部署请求是 multipart，manifest 为空并带 _worker.js', async () => {
+  const { findProjectByHost, deployWorker } = await import('../scripts/deploy-node.mjs');
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    seen.push({ u, init });
+    const ok = (result, info) => new Response(JSON.stringify({ success: true, result, ...(info ? { result_info: info } : {}) }));
+    if (u.includes('/pages/projects?page=1')) return ok([{ name: 'a', subdomain: 'a.pages.dev', domains: [] }], { total_pages: 2 });
+    if (u.includes('/pages/projects?page=2')) return ok([{ name: 'syf', subdomain: 'syf.pages.dev', domains: ['v1n3.example.xyz'] }], { total_pages: 2 });
+    if (u.endsWith('/pages/projects/syf/deployments')) return ok({ id: 'dep-new', environment: 'production', latest_stage: { name: 'deploy', status: 'success' } });
+    return new Response('{"success":false}', { status: 404 });
+  };
+  try {
+    assert.equal(await findProjectByHost('tok', 'acc', 'V1N3.example.xyz'), 'syf');
+    const d = await deployWorker('tok', 'acc', 'syf', Buffer.from('export default {}'));
+    assert.equal(d.id, 'dep-new');
+    const req = seen.at(-1);
+    assert.equal(req.init.method, 'POST');
+    assert.equal(req.init.headers.Authorization, 'Bearer tok');
+    const form = req.init.body;
+    assert.equal(form.get('manifest'), '{}');
+    assert.equal(form.get('_worker.js').name, '_worker.js');
+    assert.equal(await form.get('_worker.js').text(), 'export default {}');
+  } finally { globalThis.fetch = realFetch; }
 });

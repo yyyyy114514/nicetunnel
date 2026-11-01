@@ -117,7 +117,7 @@ function cfFake({ online = [], pages = [] } = {}) {
 }
 
 test('节点账号配置：建 KV → 找到 Pages 项目加绑定 → 重试部署', async () => {
-  const pages = [{ name: 'proj-a', subdomain: 'proj-a.pages.dev', domains: ['proj-a.pages.dev', 'n1.example.com'], canonical_deployment: { id: 'dep1' } }];
+  const pages = [{ name: 'proj-a', subdomain: 'proj-a.pages.dev', domains: ['proj-a.pages.dev', 'n1.example.com'], canonical_deployment: { id: 'dep1' }, source: { type: 'github' } }];
   assert.equal(findPagesProject(pages, ['n1.example.com'])?.name, 'proj-a');
   const f = cfFake({ pages });
   const meta = await setupAccount({ account: { id: 'a', hosts: ['n1.example.com'], auth: { apiToken: 't'.repeat(40) } }, cfId: HEX(1), fetchFn: f, now: 1 });

@@ -187,14 +187,30 @@ export async function setupAccount({ account, cfId, fetchFn, now, prev = {}, red
     const up = await cfApi(fetchFn, account, 'PATCH', `/accounts/${cfId}/pages/projects/${encodeURIComponent(proj.name)}`, patch);
     if (!up.ok) return { ...meta, manual: true, err: '添加绑定失败：' + up.error + permHint(up, 'Cloudflare Pages: Edit') };
     meta.bound = true;
+    meta.boundAt = now;
     meta.manual = false;
     meta.deployId = proj.canonical_deployment?.id || proj.latest_deployment?.id || '';
+    meta.directUpload = !proj.source?.type; // 没有 Git 来源 = 直接上传部署
   }
-  // 3) 绑定要重新部署才生效：重试最近一次生产部署（内容不变）
+  // 3) 绑定要重新部署才生效
   if (redeploy && meta.bound && meta.project && !meta.redeployed) {
-    if (!meta.deployId) return { ...meta, err: '绑定已添加，但项目还没有部署：请在 Cloudflare 控制台重新部署一次' };
+    if (!meta.boundAt) meta.boundAt = now; // 旧记录没有加绑定的时间：从现在算
+    // 加绑定之后已经有了新的生产部署（例如管理员重新上传了节点包）：绑定已生效，直接算完成
+    const pj = await cfApi(fetchFn, account, 'GET', `/accounts/${cfId}/pages/projects/${encodeURIComponent(meta.project)}`);
+    if (pj.ok) {
+      const cur = pj.json?.result?.canonical_deployment;
+      if (pj.json?.result?.name) meta.directUpload = !pj.json.result.source?.type;
+      const at = Date.parse(cur?.created_on || '');
+      if (cur?.id && at > meta.boundAt && cur.latest_stage?.status !== 'failure') { meta.redeployed = true; meta.blocked = false; meta.deployId = cur.id; return meta; }
+      if (cur?.id) meta.deployId = cur.id;
+    }
+    if (!meta.deployId) return { ...meta, err: '绑定已添加，但项目还没有部署：请在 Cloudflare 控制台部署一次' };
+    // 直接上传的项目 Cloudflare 不允许用 API 重试（只有 Git 构建可以），只能重新上传一次代码
+    if (meta.directUpload) return { ...meta, err: DIRECT_UPLOAD_HINT };
+    // Git 构建的项目：重试最近一次生产部署（内容不变）
     const rd = await cfApi(fetchFn, account, 'POST', `/accounts/${cfId}/pages/projects/${encodeURIComponent(meta.project)}/deployments/${meta.deployId}/retry`);
     if (!rd.ok) {
+      if (/direct upload/i.test(rd.error || '')) return { ...meta, directUpload: true, err: DIRECT_UPLOAD_HINT };
       // 项目被 Cloudflare 封禁（abuse）：根本部署不了，标记出来，不再把用户分到这个账号
       if (/has been blocked|abusereply/i.test(rd.error || '')) return { ...meta, blocked: true, err: '这个 Pages 项目已被 Cloudflare 封禁（abuse），无法部署，节点不可用。不会再把用户分到这个账号；请换一个账号或项目' };
       return { ...meta, err: '绑定已添加，但重新部署失败：' + String(rd.error || '').replace(/[。.]\s*$/, '') + '。请在 Cloudflare 控制台手动重新部署一次' };
@@ -204,6 +220,9 @@ export async function setupAccount({ account, cfId, fetchFn, now, prev = {}, red
   }
   return meta;
 }
+
+const DIRECT_UPLOAD_HINT = '绑定已加好，还差重新部署一次才生效。这个项目是直接上传部署的，Cloudflare 不允许用 API 重新部署：'
+  + '请在 Pages 控制台重新上传一次节点包（或运行 node scripts/deploy-node.mjs），完成后再点一次「自动配置」，会自动检测到新部署并变为就绪';
 
 /**
  * 账号是否能接用户：KV 有了，并且（自动绑定后重新部署成功，或管理员确认已手动绑定并部署）；项目被封禁的不算。
