@@ -16,6 +16,7 @@ import { buildLabel } from '../build-info.js';
 import { loadRegionStructure, buildRegionSpecs, newRegionCache } from './regions.js';
 import { renderSubscription } from './sub/index.js';
 import { KEYS } from './store.js';
+import { muPathPrefix } from '../lib/mu.js';
 
 export const PLACEHOLDER_UUID = '00000000-0000-4000-8000-000000000000';
 export const NODE_DEPS = { base64SecretEncode, parseChainAccount, defaultChainPort, replaceStars };
@@ -36,13 +37,14 @@ export function resetPipelineState() {
 export const cidrKey = (isp) => `nt.cidr.${isp}`;
 
 /** 轮询一批账号并按需写快照（Cron / 懒刷新 / 后台手动共用） */
-export async function pollAndPersist({ store, settings, accounts, now, fetchFn, ids, force = false, tickMinutes = 0 }) {
+export async function pollAndPersist({ store, settings, accounts, now, fetchFn, ids, force = false, tickMinutes = 0, reserve = 0 }) {
   const [current, persisted] = await Promise.all([store.getUsage(), store.getPersistedUsage ? store.getPersistedUsage() : null]);
-  const r = await pollBatch({ accounts, snapshot: current || emptySnapshot(now), settings, now, fetchFn, ids, force, tickMinutes });
+  const r = await pollBatch({ accounts, snapshot: current || emptySnapshot(now), settings, now, fetchFn, ids, force, tickMinutes, reserve });
   // 必须和"已落盘"的快照比较，而不是内存版（否则热 isolate 里永远判定"刚写过"）
   const persist = force || shouldPersist(persisted, r.snapshot, settings, now);
-  if (persist) await store.saveUsage(r.snapshot, { force: true });
-  else await store.saveUsage(r.snapshot, { minIntervalMs: Infinity }); // 暂存本 isolate，下次合并落盘
+  const liveIds = (accounts || []).map((a) => a.id);
+  if (persist) await store.saveUsage(r.snapshot, { force: true, liveIds });
+  else await store.saveUsage(r.snapshot, { minIntervalMs: Infinity, liveIds }); // 暂存本 isolate，下次合并落盘
   return { ...r, persisted: persist };
 }
 
@@ -92,7 +94,9 @@ export async function buildSubscription(o) {
   const settings = o.overrides ? applyPatch(o.settings, o.overrides) : o.settings;
   const preview = !!(o.preview || o.overrides?.preview);
   const url = o.url || new URL(o.request.url);
-  const uuid = o.generatorMode ? PLACEHOLDER_UUID : o.identity.uuid;
+  // 多用户专属订阅：节点用该用户的 UUID，路径加 /_u<ID> 前缀（o.user = {id, uuid, token}）
+  const user = o.generatorMode ? null : o.user || null;
+  const uuid = o.generatorMode ? PLACEHOLDER_UUID : user ? user.uuid : o.identity.uuid;
 
   const [rawAccounts, snapshot] = await Promise.all([store.getAccounts(), store.getUsage()]);
   const accounts = normalizeAccounts(rawAccounts);
@@ -141,9 +145,15 @@ export async function buildSubscription(o) {
   const fullPool = buildHostPool({ settings, accounts, snapshot: snapshot || emptySnapshot(now), now });
   const summary = poolSummary(fullPool, settings, now);
   const checks = o.generatorMode || typeof store.getJson !== 'function' ? null : await store.getJson(KEYS.hostChecks, 300e3).catch(() => null);
-  const { pool, regionPool: freeRegionPool } = applyHostChecks(fullPool, checks, now);
+  const checked = applyHostChecks(fullPool, checks, now);
+  // 用户订阅只分配到已配置好多用户的账号（o.muReady = 账号 id 集合）；一个都没有时回退主站自己
+  // 主站自己的域名总是可用（主站数据面直接读自己的 KV）；其它没有账号归属的域名不知道配没配好，不分给用户
+  const mainHosts = new Set([o.identity.host, ...(o.identity.hosts || []), ...(settings.paid?.mainHosts || [])].filter(Boolean));
+  const onlyReady = (list) => (user && o.muReady ? list.filter((h) => (h.accountId ? o.muReady.has(h.accountId) : mainHosts.has(h.host))) : list);
+  const pool = onlyReady(checked.pool);
+  const freeRegionPool = onlyReady(checked.regionPool);
   // Workers Paid：有付费域名（付费节点账号 / 开通付费的主站）时，地区条目只分给它们——链式连接 CPU 开销大，免费版会被掐断
-  const paidPool = settings.paid?.regionOnly === false ? [] : buildPaidRegionPool({ settings, accounts, snapshot: snapshot || emptySnapshot(now), now, mainHost: o.identity.host, checks });
+  const paidPool = onlyReady(settings.paid?.regionOnly === false ? [] : buildPaidRegionPool({ settings, accounts, snapshot: snapshot || emptySnapshot(now), now, mainHost: o.identity.host, checks }));
   const regionPool = paidPool.length ? paidPool : freeRegionPool;
   const slotSpecs = specs.filter((s) => s.origin !== 'link');
   const isRegion = (s) => Array.isArray(s.tags) && s.tags.includes('region');
@@ -163,7 +173,7 @@ export async function buildSubscription(o) {
       const shuffled = list.slice().sort(() => Math.random() - 0.5);
       hs = g.slots.map((_, i) => shuffled[i % shuffled.length] || '');
     } else {
-      const seed = makeSeed({ mode: settings.allocation.seedMode, ip: o.ip, token: o.identity.subToken, now, windowMinutes: settings.allocation.windowMinutes });
+      const seed = makeSeed({ mode: settings.allocation.seedMode, ip: o.ip, token: user ? user.token : o.identity.subToken, now, windowMinutes: settings.allocation.windowMinutes });
       hs = allocateHosts({ pool: g.pool, slotIds: g.slots.map((s) => s.id), settings, seed });
     }
     g.slots.forEach((s, i) => hostOf.set(s, hs[i]));
@@ -188,6 +198,7 @@ export async function buildSubscription(o) {
   const ctx = {
     uuid, settings: renderSettings, now, requestUrl: url.href, subName: settings.site.name,
     userAgent: o.ua || '', generatorMode: !!o.generatorMode, randomPath,
+    muPrefix: user ? muPathPrefix(user.id) : '',
   };
   const out = renderSubscription({ format: o.format, nodes, ctx, ini: rules.ini, rules });
 

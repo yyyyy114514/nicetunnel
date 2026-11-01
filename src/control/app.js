@@ -13,6 +13,7 @@ import { detectIsp } from '../lib/isp.js';
 import { UUID_RE } from './identity.js';
 import { handleLogin, handleLogout, requireAuth, isAuthed, bearerToken, safeEqual } from './auth.js';
 import { trackRequest } from './logs.js';
+import { verifySubToken, readyAccountSet } from './users.js';
 import { buildSubscription, pollAndPersist } from './pipeline.js';
 import { refreshRulesStep, getRulesStatus, fetchAndSaveIni } from './rulesfeed.js';
 import { detectFormatInfo } from './sub/index.js';
@@ -146,8 +147,18 @@ export async function handleMain({ request, env, ctx, url, identity }) {
   if (lower === 'sub') {
     const token = url.searchParams.get('token');
     const generatorMode = isGeneratorRequest(env, url, ua);
-    if (token !== identity.subToken && !generatorMode) return camouflage(request, url, env.URL || 'nginx');
+    // 多用户专属订阅：/sub?u=<用户ID>.<签名>
+    const userTok = generatorMode ? '' : (url.searchParams.get('u') || '');
+    if (!userTok && token !== identity.subToken && !generatorMode) return camouflage(request, url, env.URL || 'nginx');
     const stored = await store.getSettings();
+    let user = null, muReady = null;
+    if (userTok) {
+      const v = await verifySubToken({ store, settings: stored, token: userTok });
+      if (!v.ok && v.code === 'banned') return new Response('此链接已停用', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+      if (!v.ok) return camouflage(request, url, env.URL || 'nginx');
+      user = { id: v.user.id, uuid: v.uuid, token: v.token };
+      muReady = await readyAccountSet(store);
+    }
     // 反代 IP 为 auto 时，各站点用自己的环境变量 PROXYIP，没设就用公共默认反代（多人共用、常慢或不可用）。
     // 主站设了 PROXYIP 而节点站点没设，就会出现"主站的节点好用、节点账号的节点连不上 / 断"——
     // 套 Cloudflare 的网站只能经反代 IP 访问。这里把主站的 PROXYIP 写进订阅路径，所有节点统一使用。
@@ -164,13 +175,13 @@ export async function handleMain({ request, env, ctx, url, identity }) {
     const format = fi.format;
     try {
       const out = await buildSubscription({
-        store, settings, identity, request, url, now, waitUntil, format, ip, ua, generatorMode, unsupportedFormat: fi.unsupported,
-        // 生成器模式不需要 token、也不限速：不接受 sub=（否则匿名请求可以让主站去抓任意地址）
-        subParam: generatorMode ? '' : (url.searchParams.get('sub') || ''),
+        store, settings, identity, request, url, now, waitUntil, format, ip, ua, generatorMode, unsupportedFormat: fi.unsupported, user, muReady,
+        // 生成器模式不需要 token、也不限速：不接受 sub=（否则匿名请求可以让主站去抓任意地址）；用户订阅也不接受
+        subParam: generatorMode || user ? '' : (url.searchParams.get('sub') || ''),
       });
       waitUntil(trackRequest({ ...appCtx, settings }, {
         type: generatorMode ? 'Get_Best_SUB' : 'Get_SUB',
-        msg: `${format} ${out.nodes.length} 节点`,
+        msg: `${format} ${out.nodes.length} 节点${user ? ' · 用户 ' + user.id : ''}`,
         usage: { used: out.summary.used, total: out.summary.budget },
       }));
       return new Response(out.body, { status: 200, headers: out.headers });

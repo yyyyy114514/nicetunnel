@@ -21,6 +21,17 @@ export function bestIspKeys(settings) {
 }
 const keyFor = (settings, isp) => (bestIspKeys(settings)[0] === 'all' ? 'all' : ISPS.includes(isp) ? isp : 'cf');
 
+/** Cron 每 4 个 5 分钟 tick 刷一次优选，各运营商键轮流（见 cron.maintenanceTask） */
+const CRON_BEST_EVERY_MS = 4 * 5 * 60e3;
+/**
+ * KV 里的优选池多久算"过旧"（订阅请求才会自己去外拉）。必须比 Cron 刷新同一个键的周期长，
+ * 否则 Cron 正常运行时订阅请求也会反复外拉（之前固定 30 分钟，而 4 个运营商键轮一圈要 80 分钟）。
+ */
+export function bestStaleMs(settings) {
+  const cfg = settings?.preferred?.best || {};
+  return Math.max((Number(cfg.refreshSeconds) || 600) * 3 * 1000, 30 * 60e3, 2 * CRON_BEST_EVERY_MS * bestIspKeys(settings).length);
+}
+
 /**
  * 拉取全部优选 URL 并合并去重。
  * @returns {Promise<{isp:string, entries:object[], links:object[], fetchedAt:number, errors:string[], sig:string}>}
@@ -55,7 +66,10 @@ export async function fetchBest({ settings, isp, fetchFn = globalThis.fetch, now
   return { isp, entries: entries.slice(0, cfg.maxNodes), links: links.slice(0, cfg.maxNodes), fetchedAt: now, errors, sig };
 }
 
-/** Cron：刷新一个运营商键的优选池，内容变化才写 KV（只更新时间不写，省写入预算） */
+/**
+ * Cron：刷新一个运营商键的优选池。内容变化才写 KV；内容没变时只在 KV 里的时间戳快过期时补写一次——
+ * 否则 fetchedAt 一直停在旧值，订阅请求会以为 Cron 没在跑、每个实例每 10 分钟全量外拉一次。
+ */
 export async function refreshBest({ store, settings, isp, fetchFn, now = Date.now(), uuid = '' }) {
   const cfg = settings?.preferred?.best;
   if (!cfg?.enabled || !cfg.urls.length) return { skipped: '未启用优选订阅' };
@@ -65,8 +79,9 @@ export async function refreshBest({ store, settings, isp, fetchFn, now = Date.no
   iso.mem.set(key, { v: r, exp: now + MEM_TTL });
   const old = await store.getJson(bestKey(key), 0);
   const changed = !old || old.sig !== r.sig;
-  if (changed && store.kvBound) await store.putJson(bestKey(key), r, MEM_TTL);
-  return { ok: true, isp: key, count: r.entries.length + r.links.length, changed, errors: r.errors };
+  const touch = !changed && now - (old.fetchedAt || 0) > bestStaleMs(settings) / 2;
+  if ((changed || touch) && store.kvBound) await store.putJson(bestKey(key), r, MEM_TTL);
+  return { ok: true, isp: key, count: r.entries.length + r.links.length, changed, touched: touch, errors: r.errors };
 }
 
 /**
@@ -82,7 +97,7 @@ export async function loadBest({ store, settings, isp, fetchFn, now = Date.now()
   if (mem && mem.exp > now) return { ...mem.v, source: 'memory' };
   const kv = store?.kvBound ? await store.getJson(bestKey(key), MEM_TTL) : null;
   // KV 数据过旧（Cron 不在跑，例如主站是 Pages）：后台在内存里刷新，当前仍返回旧数据
-  const tooOld = !kv || now - (kv.fetchedAt || 0) > Math.max(cfg.refreshSeconds * 3, 30 * 60) * 1000;
+  const tooOld = !kv || now - (kv.fetchedAt || 0) > bestStaleMs(settings);
   if (tooOld && !iso.inflight.has(key)) {
     const p = fetchBest({ settings, isp: key, fetchFn, now, uuid })
       .then((r) => { if (r.entries.length || r.links.length) iso.mem.set(key, { v: r, exp: now + MEM_TTL }); })

@@ -16,7 +16,15 @@ export const TYPE_TO_EVENT = {
   Init_Config: 'configSave',
   lowQuota: 'lowQuota',
   accountError: 'accountError',
+  // usage.js collectEvents 实际产出的类型（之前表里没有，额度/账号告警一条都发不出去）
+  low: 'lowQuota',
+  exhausted: 'lowQuota',
+  authFailed: 'accountError',
+  pollFailing: 'accountError',
+  recovered: 'accountError',
 };
+
+const ALERT_TITLES = { low: '额度偏低', exhausted: '额度耗尽', authFailed: 'Token 失效', pollFailing: '用量查询连续失败', recovered: '账号恢复', lowQuota: '额度告警', accountError: '账号异常' };
 
 /** 新建通知状态（isolate 内存） */
 export const createNotifyState = () => ({ lastByEvent: new Map(), lastByKey: new Map() });
@@ -129,7 +137,7 @@ export function formatRequestMessage({ siteName, type, ip, cc, asn, url, ua, tim
  * @param {{siteName:string, event:{type:string, accountId?:string, [k:string]:any}, accountName?:string, time:number}} o
  */
 export function formatAlertMessage({ siteName, event, accountName, time }) {
-  const title = event.type === 'lowQuota' ? '额度告警' : event.type === 'accountError' ? '账号异常' : '系统通知';
+  const title = ALERT_TITLES[event.type] || '系统通知';
   const lines = [`<b>#${escapeHtml(siteName)} ${title}</b>`, ''];
   lines.push(`📌 <b>类型：</b>#${escapeHtml(event.type)}`);
   if (event.accountId) lines.push(`👤 <b>账号：</b>${escapeHtml(accountName || event.accountId)}`);
@@ -152,15 +160,17 @@ export async function notifyUsageEvents({ settings, events = [], accounts = [], 
   const groups = new Map();
   for (const ev of events) {
     if (!ev || !TYPE_TO_EVENT[ev.type] || TYPE_TO_EVENT[ev.type] === 'subFetch') { skipped++; continue; }
-    if (!groups.has(ev.type)) groups.set(ev.type, []);
-    groups.get(ev.type).push(ev);
+    // 按通知开关（lowQuota / accountError）分组：同一开关的多种类型合并成一条，避免互相被限频吞掉
+    const key = TYPE_TO_EVENT[ev.type];
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(ev);
   }
   const siteName = settings?.site?.name || 'nicetunnel';
   const day = new Date(now).toISOString().slice(0, 10);
-  for (const [type, evs] of groups) {
+  for (const [eventKey, evs] of groups) {
     const text = evs.map((ev) => formatAlertMessage({ siteName, event: ev, accountName: names.get(ev.accountId), time: now })).join('\n\n');
-    const ids = evs.map((e) => e.accountId || '').sort().join(',');
-    const r = await sendTelegram({ settings, fetchFn, now, state, event: TYPE_TO_EVENT[type], dedupeKey: `${type}|${ids}|${day}`, text: text.slice(0, 3800) });
+    const ids = evs.map((e) => e.type + ':' + (e.accountId || '')).sort().join(',');
+    const r = await sendTelegram({ settings, fetchFn, now, state, event: eventKey, dedupeKey: `${eventKey}|${ids}|${day}`, text: text.slice(0, 3800) });
     if (r.sent) sent += evs.length; else skipped += evs.length;
   }
   return { sent, skipped };

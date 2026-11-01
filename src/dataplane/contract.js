@@ -17,6 +17,9 @@
 //  12. 扫描防护（guard-cred@1）：只把 UUID / Trojan 密码不符计为认证失败（XUDP 的 Mux 命令等正常流量不再导致封 IP）。
 //  13. 节点自报统计（node-stats@1）：GET /version?uuid=<UUID>&stats=1 附带本 isolate 的连接 / 拦截 / 链路成败 / 最近错误，只在内存，不耗额度。
 //  14. 出站连接器兜底（socket-fallback@1）：运行环境没有 request.fetcher 时改用 cloudflare:sockets connect()；SOCKET_API=sockets 强制使用。/version?stats=1 的 Socket 字段报告实际用的是哪个。
+//  16. 多用户专属链接（multi-user@1）：路径前缀 /_u<8 位用户ID>，该用户的 UUID = HMAC(密钥, 用户ID)。密钥、封禁名单、超限用户允许的 IP
+//      由主站写进节点账号 KV（绑定名 NT_MU，键 nt.mu.state），节点每分钟读一次；在线上报写 Analytics Engine（绑定名 NT_AE）。
+//      不带前缀的连接照旧用共享 UUID。旧节点不认识前缀，用户链接在旧节点上连不上（后台按能力只把用户分到新节点）。
 //  15. 地区路由种子（pool-seed@1）：路径明文可带 s:[[类型, 账号]…]（该地区列表前几台）。新实例没缓存列表时先用种子拨号、后台拉列表；SSTP 连服务器与首个 HTTP 响应各最多 3 秒，死节点更快换下一台。
 //
 // 向前兼容的约定：
@@ -30,4 +33,4 @@ export const DATAPLANE_VERSION = 2;
 export const POOL_ROUTE_V = 1;
 
 /** 本节点支持的能力（供后台检测与以后的主站判断） */
-export const CAPS = Object.freeze(['chain-path@1', 'pool-route@1', 'chain-health@1', 'chain-failover@1', 'sstp-keepalive@1', 'chain-race@1', 'guard-cred@1', 'node-stats@1', 'socket-fallback@1', 'pool-seed@1', 'xhttp-mark@1', 'version-cors@1']);
+export const CAPS = Object.freeze(['chain-path@1', 'pool-route@1', 'chain-health@1', 'chain-failover@1', 'sstp-keepalive@1', 'chain-race@1', 'guard-cred@1', 'node-stats@1', 'socket-fallback@1', 'pool-seed@1', 'xhttp-mark@1', 'version-cors@1', 'multi-user@1']);

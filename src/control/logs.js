@@ -116,13 +116,24 @@ export async function recordLog({ store, settings, entry, env, now = Date.now(),
  * @param {object} ctx AppContext（需 request/store/settings；可选 now/ip/ua/env/fetchFn/logState/notifyState）
  * @param {{type:string, msg?:string, usage?:{used:number,total:number}|null}} o
  */
+/** 自定义 KEY 的快速订阅路径 /<KEY> 等同于订阅令牌：写日志 / 发 TG 前遮掉（redactSecrets 只处理 ?token= 这类查询参数） */
+export function hideKeyPath(url, identity) {
+  const key = identity?.hasCustomKey ? String(identity.secretKey || '') : '';
+  if (!key) return String(url || '');
+  let out = String(url || '');
+  for (const k of new Set([key, encodeURIComponent(key)])) out = out.split('/' + k).join('/***');
+  return out;
+}
+
 export async function trackRequest(ctx, { type, msg = '', usage = null }) {
   try {
-    const { request, settings } = ctx;
+    const { settings } = ctx;
+    const request = ctx.request;
+    const safeUrl = hideKeyPath(request.url, ctx.identity);
     const now = ctx.now ?? Date.now();
     const ip = ctx.ip || request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '未知IP';
     const ua = ctx.ua || request.headers.get('User-Agent') || 'Unknown';
-    const entry = makeLogEntry({ type, now, ip, ua, cf: request.cf, loc: ctx.loc, url: request.url, msg });
+    const entry = makeLogEntry({ type, now, ip, ua, cf: request.cf, loc: ctx.loc, url: safeUrl, msg });
     const logged = await recordLog({ store: ctx.store, settings, entry, env: ctx.env, now, state: ctx.logState || defaultLogState });
     const event = TYPE_TO_EVENT[type];
     let tg = { sent: false, reason: 'event_off' };
@@ -134,7 +145,7 @@ export async function trackRequest(ctx, { type, msg = '', usage = null }) {
         dedupeKey: `${type}|${ip}|${ua}`,
         text: () => formatRequestMessage({
           siteName: settings?.site?.name || 'nicetunnel', type, ip, cc: entry.loc, asn: entry.asn,
-          url: request.url, ua, time: now, usage,
+          url: safeUrl, ua, time: now, usage,
         }),
       });
     }

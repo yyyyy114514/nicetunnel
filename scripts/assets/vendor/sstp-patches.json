@@ -205,5 +205,20 @@
     "label": "反代目标记忆（函数）",
     "search": "async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com', UUID = '00000000-0000-4000-8000-000000000000') {",
     "replace": "// [NT-HOOK] 反代目标记忆：Worker 连不了 Cloudflare 的 IP，访问套了 CF 的网站时上游每条连接都先直连、等它失败再走反代，\n// 多一次往返外加失败等待（客户端感觉\"CF 网站特别慢\"）。这里在本 isolate 内记住走过反代的目标，10 分钟内直接走反代。\nconst 反代目标 = new Map();\nconst 反代目标有效毫秒 = 10 * 60 * 1000;\nfunction 记录目标需走反代(主机, 端口) {\n\tif (反代目标.size > 2048) 反代目标.clear();\n\t反代目标.set(String(主机).toLowerCase() + ':' + 端口, Date.now());\n}\nfunction 目标需走反代(主机, 端口) {\n\tconst t = 反代目标.get(String(主机).toLowerCase() + ':' + 端口);\n\treturn !!t && Date.now() - t < 反代目标有效毫秒;\n}\n\nasync function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com', UUID = '00000000-0000-4000-8000-000000000000') {"
+  },
+  {
+    "label": "每请求并发拨号数：从反代上下文读取（不读被其它请求改写的全局变量）",
+    "search": "\tconst ctx反代IP = 反代上下文.反代IP || '';",
+    "replace": "\t// [NT-HOOK] 并发拨号数按本次请求者的运营商决定（移动用户单路）。全局变量会被同一实例里后来的请求改写，这里在连接开始时取定\n\tconst 本次TCP并发拨号数 = Math.max(1, (反代上下文.TCP并发拨号数 ?? TCP并发拨号数) | 0);\n\tconst ctx反代IP = 反代上下文.反代IP || '';"
+  },
+  {
+    "label": "每请求并发拨号数：预加载竞速",
+    "search": "\t\tconst 拨号上限 = Math.max(1, TCP并发拨号数 | 0);",
+    "replace": "\t\tconst 拨号上限 = 本次TCP并发拨号数; // [NT-HOOK]"
+  },
+  {
+    "label": "每请求并发拨号数：直连候选",
+    "search": "Array.from({ length: TCP并发拨号数 }, (_, attempt)",
+    "replace": "Array.from({ length: 本次TCP并发拨号数 }, (_, attempt)"
   }
 ]

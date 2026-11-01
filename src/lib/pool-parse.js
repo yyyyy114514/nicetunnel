@@ -74,7 +74,8 @@ export function parseNodeList(text, regionRe) {
     if (!g) { g = { region: r.region, kind: r.kind, nodes: [] }; groups.set(key, g); }
     g.nodes.push({ type: cm[1].toLowerCase(), account: cm[2] });
     const am = entry.match(ADDR_RE);
-    if (am) entryMap.set(am[1].replace(/^\[|\]$/g, ''), Number(am[2]) || 443);
+    // 端口必须是 1~65535（之前 Number(port) || 443 会接受 99999 之类的值）
+    if (am) { const port = Number(am[2]); entryMap.set(am[1].replace(/^\[|\]$/g, ''), Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 443); }
   }
   return { groups, entries: [...entryMap].map(([address, port]) => ({ address, port })), total };
 }

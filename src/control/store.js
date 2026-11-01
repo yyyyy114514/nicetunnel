@@ -141,11 +141,19 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
    * 写入前重新读 KV 并逐账号合并，避免覆盖其他 isolate 刚写入的结果。
    * @returns {Promise<boolean>} 是否真的写入
    */
-  async function saveUsage(u, { force = false, minIntervalMs = 60e3 } = {}) {
+  async function saveUsage(u, { force = false, minIntervalMs = 60e3, liveIds = null } = {}) {
     const t = now();
-    state.localUsage = mergeSnapshots(state.localUsage, u);
+    // liveIds：当前还存在的账号。合并是取并集，不剪掉的话已删除账号的旧条目会被 KV 里的旧快照带回来（直到 UTC 换日）
+    const live = Array.isArray(liveIds) ? new Set(liveIds) : null;
+    const prune = (snap) => {
+      if (!live || !snap?.accounts) return snap;
+      const accounts = {};
+      for (const [id, v] of Object.entries(snap.accounts)) if (live.has(id)) accounts[id] = v;
+      return { ...snap, accounts };
+    };
+    state.localUsage = prune(mergeSnapshots(prune(state.localUsage), u));
     if (!force && t - state.lastUsageWrite < minIntervalMs) { setMemo(KEYS.usage, state.localUsage, TTL.usage); return false; }
-    const merged = mergeSnapshots(kvBound ? await rawGet(KEYS.usage, 'json') : null, state.localUsage);
+    const merged = prune(mergeSnapshots(prune(kvBound ? await rawGet(KEYS.usage, 'json') : null), state.localUsage));
     await putJson(KEYS.usage, merged, TTL.usage);
     state.lastUsageWrite = t;
     state.persistedUsage = merged;

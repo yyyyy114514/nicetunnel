@@ -109,3 +109,18 @@ test('额度事件：同类合并为一条消息，同日同组去重', async ()
   assert.equal(again.sent, 0);
   assert.ok(formatAlertMessage({ siteName: 's', event: { type: 'accountError', accountId: 'x', error: 'bad' }, time: 0 }).includes('账号异常'));
 });
+
+test('H3：usage 实际产出的 low / exhausted / authFailed / pollFailing / recovered 都能发出', async () => {
+  const f = fakeFetch();
+  const events = ['low', 'exhausted', 'authFailed', 'pollFailing', 'recovered'].map((type, i) => ({ type, accountId: 'acc' + i }));
+  const r = await notifyUsageEvents({ settings: settingsOn(), events, accounts: [], fetchFn: f, now: 1000, state: createNotifyState() });
+  assert.equal(r.sent, 5);
+  assert.equal(f.calls.length, 2, '额度类一条、账号类一条');
+  const all = f.calls.map((c) => decodeURIComponent(c.url.split('&text=')[1])).join(' | ');
+  for (const w of ['额度耗尽', '额度偏低', 'Token 失效', '用量查询连续失败', '账号恢复']) assert.ok(all.includes(w), w);
+  // 关掉 lowQuota 开关后额度类不发
+  const off = settingsOn();
+  off.notify.telegram.events = { lowQuota: false, accountError: true };
+  const r2 = await notifyUsageEvents({ settings: off, events, accounts: [], fetchFn: fakeFetch(), now: 1000, state: createNotifyState() });
+  assert.equal(r2.sent, 3);
+});

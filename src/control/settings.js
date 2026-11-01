@@ -138,6 +138,8 @@ export function defaultSettings() {
       mainHosts: [], // 主站承载地区条目的域名；留空 = 订阅请求所用的主站域名
       dailyBudget: 330000, // 付费账号的每日预算（10M/月 ÷ 30），用于分配权重；账号自己填了每日额度时以账号为准
     },
+    // 多用户专属链接（见 control/users.js）：开启后后台多一个「用户」页
+    users: { enabled: false, defaultLimit: 2 },
     ui: { simpleMode: false },
   };
 }
@@ -331,6 +333,10 @@ export function normalizeSettings(raw) {
   pd.regionOnly = bool(pd.regionOnly, true);
   pd.mainHosts = [...new Set(strList(pd.mainHosts).map(normalizeHost).filter(Boolean))];
   pd.dailyBudget = num(pd.dailyBudget, 330000, 1000, 1e8);
+
+  const us = s.users;
+  us.enabled = bool(us.enabled, false);
+  us.defaultLimit = int(us.defaultLimit, 2, 0, 50); // 0 = 不限
 
   s.ui.simpleMode = bool(s.ui.simpleMode, false);
   return s;

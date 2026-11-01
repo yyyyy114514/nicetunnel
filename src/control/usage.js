@@ -239,6 +239,18 @@ const pollKey = (u) => (!u ? 0 : !u.ok && u.triedAt ? Math.max(u.polledAt || 0, 
  * @param {UsageSnapshot} snapshot
  * @param {{batchSize:number, now:number, ids?:string[], force?:boolean}} o
  */
+/**
+ * 一个账号这次轮询最坏要用几个子请求（只能按最坏情况算，超了后面的 Cron 任务会全部报 Too many subrequests）：
+ * - 每种鉴权方式（凭据像另一种格式时会两种都试）各需 1 次 /graphql，缺 Account ID 时再加 1 次 /accounts；
+ * - 用的是上次自动发现缓存的 Account ID：失败后会不带 ID 再完整发现一遍。
+ */
+export function pollCost(account, usage) {
+  const n = Math.max(1, authAttempts(account?.auth || {}).length);
+  if (account?.auth?.accountId) return n;
+  if (usage?.accountId) return n + n * 2;
+  return n * 2;
+}
+
 export function selectBatch(accounts, snapshot, { batchSize, now, ids, force = false, maxSubrequests = MAX_SUBREQUESTS }) {
   const want = ids ? new Set(ids) : null;
   const cand = (accounts || []).filter((a) => isMonitored(a) && hasCreds(a) && (!want || want.has(a.id)));
@@ -246,12 +258,12 @@ export function selectBatch(accounts, snapshot, { batchSize, now, ids, force = f
     .map((a, i) => ({ a, i, u: snapshot?.accounts?.[a.id] }))
     .filter((r) => force || !r.u || now - (r.u.triedAt || 0) >= MIN_POLL_INTERVAL_MS)
     .sort((x, y) => pollKey(x.u) - pollKey(y.u) || x.i - y.i);
-  // 子请求预算：缺 accountId 的号需要 2 次（/accounts + /graphql）
+  // 子请求预算：按每个账号的最坏情况计（见 pollCost）
   const out = [];
   let budget = maxSubrequests;
   for (const r of rows) {
     if (out.length >= batchSize) break;
-    const cost = r.a.auth.accountId || r.u?.accountId ? 1 : 2;
+    const cost = pollCost(r.a, r.u);
     if (cost > budget) continue;
     budget -= cost;
     out.push(r.a);
@@ -350,7 +362,7 @@ function collectEvents(account, prev, next, settings, now) {
  *          ids?: string[], force?: boolean, timeoutMs?: number}} p  ids/force 供后台"立即轮询"使用
  * @returns {Promise<{snapshot: UsageSnapshot, polled: {id:string, ok:boolean, used:number, error?:string, kind?:string}[], events: object[]}>}
  */
-export async function pollBatch({ accounts, snapshot, settings, now, fetchFn = globalThis.fetch, ids, force = false, timeoutMs = 8000, tickMinutes = 0 }) {
+export async function pollBatch({ accounts, snapshot, settings, now, fetchFn = globalThis.fetch, ids, force = false, timeoutMs = 8000, tickMinutes = 0, reserve = 0 }) {
   const cfg = usageCfg(settings);
   const base = rolloverSnapshot(snapshot, now);
   const live = new Set((accounts || []).map((a) => a.id));
@@ -358,7 +370,8 @@ export async function pollBatch({ accounts, snapshot, settings, now, fetchFn = g
   for (const [id, u] of Object.entries(base.accounts || {})) if (live.has(id)) nextAccounts[id] = u;
   const out = { ...base, v: 1, day: utcDay(now), accounts: nextAccounts };
   if (!cfg.enabled && !force) return { snapshot: out, polled: [], events: [] };
-  const maxSub = subrequestBudget(settings);
+  // reserve：同一次调用里轮询之后还要做的事（Cron 的维护任务、TG、多用户同步）预留的子请求
+  const maxSub = Math.max(2, subrequestBudget(settings) - Math.max(0, Number(reserve) || 0));
   const batch = selectBatch(accounts, out, { batchSize: ids ? Math.max(cfg.batchSize, ids.length) : autoBatchSize(accounts, cfg, tickMinutes, maxSub), now, ids, force, maxSubrequests: maxSub });
   const results = await mapLimit(batch, MAX_CONCURRENCY, (a) => {
     const known = a.auth.accountId || out.accounts[a.id]?.accountId || '';

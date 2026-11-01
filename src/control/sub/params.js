@@ -49,6 +49,8 @@ export function toProxyDescriptor(node, ctx) {
   let path = node.path || '/';
   if (ctx.generatorMode) path = '/';
   else if (n.randomPath && typeof ctx.randomPath === 'function') path = ctx.randomPath(path);
+  // 多用户专属订阅：节点路径前面加 /_u<用户ID>（节点据此找出该用户、换成他的 UUID，再去掉前缀）
+  if (ctx.muPrefix && !ctx.generatorMode) path = ctx.muPrefix + (path.startsWith('/') ? path : '/' + path);
   if (network === 'grpc') path = path.split('?')[0] || '/';
 
   const host = node.host || 'example.com';

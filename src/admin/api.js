@@ -16,6 +16,7 @@ import { buildLabel } from '../build-info.js';
 import { KEYS } from '../control/store.js';
 import { HOST_CHECK_TTL_MS } from '../control/allocator.js';
 import { sendTelegram, notifyUsageEvents, telegramConfigured, formatTime, escapeHtml, defaultNotifyState, redactSecrets } from '../control/notify.js';
+import { createUsersRoutes } from './users-api.js';
 
 const MAX_BODY = 2 * 1024 * 1024;
 const PREVIEW_BODY_LIMIT = 20 * 1024;
@@ -441,7 +442,7 @@ export function createAdminApi(deps = {}) {
     } else {
       const snapshot = await loadUsage(c.store, c.now);
       r = await deps.usage.pollBatch({ accounts: all, snapshot, settings: c.settings, now: c.now, fetchFn: c.fetchFn, ids, force: true });
-      try { saved = await c.store.saveUsage(r.snapshot, { force: true }); } catch { /* KV 写失败仍返回结果 */ }
+      try { saved = await c.store.saveUsage(r.snapshot, { force: true, liveIds: all.map((a) => a.id) }); } catch { /* KV 写失败仍返回结果 */ }
     }
     if (r.events?.length) waitUntil(ctx, notifyUsageEvents({ settings: c.settings, events: r.events, accounts: all, fetchFn: c.fetchFn, now: c.now, state: notifyState }));
     return jsonResponse({ ok: true, saved, polled: r.polled || [], usage: r.snapshot, pool: poolView(c.settings, all, r.snapshot, c.now) });
@@ -648,7 +649,7 @@ export function createAdminApi(deps = {}) {
     if (scope === 'settings' || scope === 'all') { await c.store.saveSettings(defaultSettings()); done.push('settings'); }
     if (scope === 'usage' || scope === 'all') {
       const empty = deps.usage?.emptySnapshot ? deps.usage.emptySnapshot(c.now) : { v: 1, ts: c.now, day: new Date(c.now).toISOString().slice(0, 10), cursor: 0, accounts: {} };
-      await c.store.saveUsage(empty, { force: true });
+      await c.store.saveUsage(empty, { force: true, liveIds: [] });
       done.push('usage');
     }
     if (scope === 'logs' || scope === 'all') { await c.store.clearLogs(); done.push('logs'); }
@@ -732,6 +733,8 @@ export function createAdminApi(deps = {}) {
     'POST rules/refresh': refreshRules,
     'POST rules/ini/fetch': fetchIni,
     'POST reset': reset,
+    // 多用户专属链接（「用户」页）
+    ...createUsersRoutes(readJson),
   };
   /** 旧版路径（大小写与上游一致：getADDAPI 区分大小写，其余小写匹配） */
   const LEGACY_ROUTES = {

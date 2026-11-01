@@ -10,6 +10,7 @@ import { DATAPLANE_VERSION, CAPS } from './contract.js';
 import { buildLabel } from '../build-info.js';
 import { reportAuthFail, isBlocked } from './guard.js';
 import { bump, recordFail, snapshotStats } from './stats.js';
+import { muCheck, muInfo } from './mu-guard.js';
 
 export const UPSTREAM_VERSION_NUMBER = 20261008222327; // 与上游 EDT_版本号 同格式；/version 接口返回
 
@@ -66,7 +67,9 @@ async function applyEnv(request, env) {
     debug: ['1', 'true'].includes(env.DEBUG),
     preloadRaceDial: ['1', 'true'].includes(env.PRELOAD_RACE_DIAL),
     proxyConcurrentDial: Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 1),
-    tcpConcurrentDial: !env.TCP_CONCURRENT_DIAL && tcp !== 1 && detectIspUpstream(request) === 'cmcc' ? 1 : tcp,
+    // 全局只放环境变量的值；按运营商调整的值随本次连接的反代上下文传进数据面（见 handleDataPlane），
+    // 否则同一实例里并发的连接会读到别人（例如移动用户）设的值
+    tcpConcurrentDial: tcp,
     chainResultHook: (ok, hostname, port) => { bump(ok ? 'chainOk' : 'chainFail'); reportChainResult(ok, hostname, port); },
     failLogHook: recordFail,
     chainConnectTimeoutMs: Math.max(1000, Number(env.CHAIN_TIMEOUT) || 5999),
@@ -85,6 +88,8 @@ async function applyEnv(request, env) {
     if (c) configure({ socketConnect: c });
     else { bump('noSocket'); recordFail('[TCP] 本节点既没有 request.fetcher 也加载不到 cloudflare:sockets，无法建立出站连接'); }
   }
+  // 本次连接的并发拨号数：移动用户（没显式设置时）单路
+  return { tcpDial: !env.TCP_CONCURRENT_DIAL && tcp !== 1 && detectIspUpstream(request) === 'cmcc' ? 1 : tcp };
 }
 
 /** 默认反代 IP（44–49 行） */
@@ -100,7 +105,7 @@ async function defaultProxy(request, env) {
 /**
  * /version 接口（56–68 行）：只有携带"近似匹配"的 uuid 才返回版本号，否则落到后续处理（伪装页）。
  */
-export function versionResponse(url, uuid, edition = 'full', socket = null) {
+export function versionResponse(url, uuid, edition = 'full', socket = null, mu = null) {
   const q = (url.searchParams.get('uuid') || '').toLowerCase();
   if (!UUID_RE.test(q)) return null;
   const sum8 = (s) => { let n = 0; for (let i = 0; i < 8; i++) { const c = s.charCodeAt(i); n += c <= 57 ? c - 48 : c - 87; } return n; };
@@ -110,7 +115,7 @@ export function versionResponse(url, uuid, edition = 'full', socket = null) {
     // 带 CORS：后台页面在浏览器里直接检测各个节点站点（只有携带正确 UUID 才会返回，不泄露其它信息）
     // ?stats=1：附带本 isolate 的运行统计（连接、拦截、链路成败、最近错误），供后台"检测节点"排查断连
     const body = { Version: UPSTREAM_VERSION_NUMBER, Dataplane: DATAPLANE_VERSION, Caps: CAPS, Edition: edition, Build: buildLabel() };
-    if (url.searchParams.has('stats')) { body.Stats = snapshotStats(); if (socket) body.Socket = socket; }
+    if (url.searchParams.has('stats')) { body.Stats = snapshotStats(); if (socket) body.Socket = socket; if (mu) body.Mu = mu; }
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } });
   }
   return null;
@@ -126,7 +131,8 @@ export function versionResponse(url, uuid, edition = 'full', socket = null) {
 export async function handleDataPlane(request, env, url, identity, edition = 'full') {
   const path = url.pathname.slice(1).toLowerCase();
   if (path === 'version') {
-    const v = versionResponse(url, identity.uuid, edition, url.searchParams.has('stats') ? await socketInfo(request, env) : null);
+    const stats = url.searchParams.has('stats');
+    const v = versionResponse(url, identity.uuid, edition, stats ? await socketInfo(request, env) : null, stats ? muInfo(env) : null);
     if (v) return v;
     // UUID 不匹配：逐字节沿用普通伪装页，不附加 CORS / no-store 等 nicetunnel 独有响应特征。
     return camouflage(request, url, env.URL || 'nginx');
@@ -142,7 +148,16 @@ export async function handleDataPlane(request, env, url, identity, edition = 'fu
   if (!GUARD_OFF(env) && isBlocked(clientIp(request))) { bump('guardBlocked'); return camouflage(request, url, env.URL || 'nginx'); }
   bump(isWs ? 'ws' : 'post');
 
-  await applyEnv(request, env);
+  // 多用户专属链接（路径前缀 /_u<ID>）：校验封禁 / 并行限制，换成该用户的 UUID，去掉前缀再交给上游
+  const mu = await muCheck(request, env, url, clientIp(request));
+  if (mu) {
+    if (!mu.ok) { bump('muDeny'); return camouflage(request, url, env.URL || 'nginx'); }
+    bump('muOk');
+    identity = { ...identity, uuid: mu.uuid };
+    url = mu.url;
+  }
+
+  const { tcpDial } = await applyEnv(request, env);
   // 地区路由（/video/<密文> 里是 {type:'pool'}）：连接建立时才决定连哪台链式代理，再改写成上游认识的路径
   let 链路候选 = null;
   if (url.pathname.includes('/video/')) {
@@ -157,6 +172,7 @@ export async function handleDataPlane(request, env, url, identity, edition = 'fu
   }
   const dp = await defaultProxy(request, env);
   const proxyCtx = await parseProxyParams(url, identity.uuid, dp.ip, dp.fallback);
+  proxyCtx.TCP并发拨号数 = tcpDial;
   // 故障转移候选随连接一起传进数据面：第一台拨号失败时自动换下一台，而不是直接掐断客户端
   if (链路候选?.length > 1) proxyCtx.代理候选 = 链路候选;
   if (isWs) return handleWebSocket(request, identity.uuid, url, proxyCtx);

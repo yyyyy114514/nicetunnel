@@ -1667,6 +1667,8 @@ async function SSAEAD解密(cryptoKey, nonceCounter, ciphertext) {
 }
 
 async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnWrapper, yourUUID, request = null, 反代上下文 = {}, 允许木马反代 = false, 木马反代首包数据 = null, 仅建立连接 = false) {
+	// [NT-HOOK] 并发拨号数按本次请求者的运营商决定（移动用户单路）。全局变量会被同一实例里后来的请求改写，这里在连接开始时取定
+	const 本次TCP并发拨号数 = Math.max(1, (反代上下文.TCP并发拨号数 ?? TCP并发拨号数) | 0);
 	const ctx反代IP = 反代上下文.反代IP || '';
 	let ctx代理类型 = 反代上下文.代理类型 !== undefined ? 反代上下文.代理类型 : null;
 	const ctx代理全局 = 反代上下文.代理全局 !== undefined ? 反代上下文.代理全局 : false;
@@ -1776,7 +1778,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			const data = r.data;
 			return r.type === 28 && typeof data === 'string' && isIPHostname(data) ? [data] : [];
 		}))];
-		const 拨号上限 = Math.max(1, TCP并发拨号数 | 0);
+		const 拨号上限 = 本次TCP并发拨号数; // [NT-HOOK]
 		const ipList = ipv4List.length >= 拨号上限
 			? ipv4List.slice(0, 拨号上限)
 			: ipv4List.concat(ipv6List.slice(0, 拨号上限 - ipv4List.length));
@@ -1794,7 +1796,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 
 	async function connectDirect(address, port, data = null, 启用预加载 = false) {
 		const 预加载候选列表 = 启用预加载 ? await 构建预加载竞速候选列表(address, port) : null;
-		const 候选列表 = 预加载候选列表 || Array.from({ length: TCP并发拨号数 }, (_, attempt) => ({ hostname: address, port, attempt }));
+		const 候选列表 = 预加载候选列表 || Array.from({ length: 本次TCP并发拨号数 }, (_, attempt) => ({ hostname: address, port, attempt }));
 		log(预加载候选列表
 			? `[TCP直连] 并发尝试 ${候选列表.length} 路: ${候选列表.map(候选 => `${候选.hostname}:${候选.port}`).join(', ')}`
 			: `[TCP直连] 并发尝试 ${候选列表.length} 路: ${address}:${port}`);

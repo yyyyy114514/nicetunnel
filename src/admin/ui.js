@@ -268,6 +268,10 @@ function clientMain() {
       { t: "界面", f: [
         ['ui.simpleMode', '小白模式（隐藏高级项）', 'bool'],
       ] },
+      { t: "多用户专属链接", d: '开启后左侧多一个「用户」页：批量生成每人一条的订阅链接，可封禁、设置并行客户端数、查看在线和用量。原有的订阅链接不变。节点账号需要 KV 和 Analytics Engine 两个绑定（「用户」页可自动配置）。', f: [
+        ['users.enabled', '开启多用户', 'bool'],
+        ['users.defaultLimit', '默认并行客户端数（同时在线的不同 IP；0 = 不限）', 'num'],
+      ] },
     ],
   };
 
@@ -500,7 +504,122 @@ function clientMain() {
       <span class="sp"></span><select id="rsScope" style="width:auto"><option value="usage">重置用量</option><option value="logs">清空日志</option><option value="settings">恢复默认设置</option><option value="all">全部重置</option></select>
       <button class="btn d" id="rs">执行重置</button></div></section><div class="savebar"`);
   }
+  // ---------------- 用户（多用户专属链接） ----------------
+  // 数据不在 state 里：进入本页时单独拉 /admin/api/users（分页），在线统计点按钮才查（每个账号 2 次 AE 查询）
+  const U = { q: '', offset: 0, limit: 100, data: null, stats: null, picked: new Set(), made: '' };
+  function pgUsers() {
+    return '<div id="usersRoot"><div class="card"><p class="mut">加载中…</p></div></div>';
+  }
+  function usersHtml() {
+    const d = U.data;
+    if (!d) return '<div class="card"><p class="mut">加载中…</p></div>';
+    const acc = d.accounts.map((a) => {
+      const m = a.meta || {};
+      const st = a.ready ? (a.pushed ? '<span class="pill p-ok">就绪</span>' : '<span class="pill p-low">已绑定，待下发</span>')
+        : m.nsId ? '<span class="pill p-low">缺绑定</span>' : '<span class="pill p-stale">未配置</span>';
+      const err = (m.err || a.error) ? '<div class="mut" style="white-space:normal;color:var(--bad)">' + h(m.err || a.error) + '</div>' : '';
+      const manual = m.nsId && !m.bound ? '<label class="chk" style="margin-left:6px"><input type="checkbox" data-mbound="' + h(a.id) + '" ' + (m.manualBound ? 'checked' : '') + '> 已手动绑定</label>' : '';
+      return '<tr><td>' + h(a.name) + (a.enabled ? '' : ' <span class="tag">未启用</span>') + '</td><td class="mono">' + h(a.cfId ? a.cfId.slice(0, 8) + '…' : '未知') + '</td><td style="white-space:normal;min-width:220px">' + st + (m.project ? ' <span class="mut">Pages：' + h(m.project) + '</span>' : '') + manual + err + '</td>'
+        + '<td><button class="btn sm" data-setup="' + h(a.id) + '">' + (a.ready ? '重新配置' : '自动配置') + '</button> <button class="btn sm" data-msetup-reset="' + h(a.id) + '">重置</button></td></tr>';
+    }).join('');
+    const readyN = d.accounts.filter((a) => a.ready).length;
+    const rows = d.users.map((u) => {
+      const s = U.stats?.stats?.[u.id];
+      const lim = u.effLimit ? u.effLimit + (u.limit == null ? '<span class="mut">（默认）</span>' : '') : '不限';
+      const online = s ? (s.online ? '<b>' + s.online + '</b>' : '0') + (u.effLimit && s.online > u.effLimit ? ' <span class="pill p-exhausted">超限</span>' : '') : '<span class="mut">-</span>';
+      return '<tr><td><input type="checkbox" data-upick="' + u.id + '" ' + (U.picked.has(u.id) ? 'checked' : '') + '></td><td class="mono">' + u.id + '</td><td><input data-uname="' + u.id + '" value="' + h(u.name) + '" style="min-width:90px"></td>'
+        + '<td>' + (u.banned ? '<span class="pill p-exhausted">已封禁</span>' : '<span class="pill p-ok">正常</span>') + '</td><td>' + lim + '</td><td>' + online + '</td><td>' + (s && s.conns != null ? fmtN(s.conns) : '<span class="mut">-</span>') + '</td><td>' + (s && s.lastSeen ? fmtT(s.lastSeen) : '<span class="mut">-</span>') + '</td>'
+        + '<td><div class="row" style="flex-wrap:nowrap;gap:4px"><input class="mono" readonly value="' + h(u.sub) + '" style="min-width:160px"><button class="btn sm" data-copy="' + h(u.sub) + '">复制</button></div></td></tr>';
+    }).join('');
+    const pages = Math.max(1, Math.ceil(d.matched / d.limit));
+    const page = Math.floor(d.offset / d.limit) + 1;
+    const statsNote = U.stats ? '统计范围：' + U.stats.accounts + ' 个账号' + (Object.keys(U.stats.errors || {}).length ? '，' + Object.keys(U.stats.errors).length + ' 个查询失败：' + h(Object.values(U.stats.errors)[0]) : '') : '点「刷新在线」查询（每个已配置账号 2 次 Analytics Engine 查询）';
+    return '<div class="card"><h2><i></i>节点账号配置<span class="sp"></span><button class="btn sm" id="uSync">立即同步</button></h2>'
+      + '<p class="mut" style="margin:0 0 10px">每个节点账号要有 KV 绑定 <code>NT_MU</code>（命名空间 nicetunnel-mu）和 Analytics Engine 绑定 <code>NT_AE</code>（数据集 nicetunnel_mu），加完重新部署一次。「自动配置」用账号的 Token 完成这些，Token 需要 <b>Workers KV Storage: Edit</b>、<b>Cloudflare Pages: Edit</b>、<b>Account Analytics: Read</b> 权限。自动配置失败时按上面的名字在 Pages 项目「设置 → 绑定」里手动加，再勾「已手动绑定」。'
+      + '主站 Worker 建议再加一个每分钟的 Cron 触发器 <code>* * * * *</code>（保留原来的 <code>*/5 * * * *</code>），并行限制约 2~4 分钟生效；不加则最慢 5 分钟同步一次。</p>'
+      + '<div class="tw"><table><thead><tr><th>账号</th><th title="Cloudflare Account ID">CF 账号</th><th>状态</th><th></th></tr></thead><tbody>' + (acc || '<tr><td colspan="4" class="mut">还没有节点账号</td></tr>') + '</tbody></table></div>'
+      + '<p class="mut">' + readyN + ' / ' + d.accounts.length + ' 个账号就绪。用户订阅只分配到就绪的账号；一个都没有时用主站自己。' + (d.sync ? '上次同步 ' + fmtT(d.sync.at) + '，超限用户 ' + d.sync.over + ' 个' + (d.sync.errors ? '，' + d.sync.errors + ' 个账号出错' : '') + '。' : '') + '</p></div>'
+      + '<div class="card"><h2><i></i>批量生成</h2><div class="row" style="gap:8px;align-items:flex-end">'
+      + '<div class="f"><label>数量（1~500）</label><input id="uCount" type="number" value="10" min="1" max="500" style="width:100px"></div>'
+      + '<div class="f"><label>名称前缀（可空）</label><input id="uPrefix" placeholder="例如 客户A-" style="width:160px"></div>'
+      + '<div class="f"><label>并行上限（空 = 默认 ' + d.defaultLimit + '，0 = 不限）</label><input id="uLimit" type="number" min="0" max="50" style="width:100px"></div>'
+      + '<button class="btn p" id="uCreate">生成</button></div>'
+      + (U.made ? '<div class="f wide" style="margin-top:10px"><label>新生成的订阅链接（每行一个）</label><textarea class="mono" readonly style="min-height:120px">' + h(U.made) + '</textarea><div><button class="btn sm" data-copy="' + h(U.made) + '">全部复制</button></div></div>' : '')
+      + '<p class="mut">链接永久有效。每条链接对应一个用户：节点用他自己的凭据，封禁或删除后立即失效（约 1~2 分钟内到达各节点）。原有的订阅链接不受影响。</p></div>'
+      + '<div class="card"><h2><i></i>用户（' + d.total + '）<span class="sp"></span><input id="uQ" value="' + h(U.q) + '" placeholder="搜索 ID / 名称" style="width:160px"><button class="btn sm" id="uSearch">搜索</button><button class="btn sm" id="uStats">刷新在线</button></h2>'
+      + '<div class="row" style="gap:8px;margin-bottom:10px"><label class="row" style="gap:6px;cursor:pointer"><input type="checkbox" id="uPickAll" ' + (d.users.length && d.users.every((u) => U.picked.has(u.id)) ? 'checked' : '') + '>全选本页</label><span class="mut">已选 ' + U.picked.size + ' 个</span><span class="sp"></span>'
+      + '<button class="btn sm" id="uBan">封禁</button><button class="btn sm" id="uUnban">解封</button><input id="uSetLimit" type="number" min="0" max="50" placeholder="并行数" style="width:80px"><button class="btn sm" id="uApplyLimit">设并行</button><button class="btn sm" id="uDefLimit">恢复默认</button><button class="btn sm" id="uCopySel">复制链接</button><button class="btn sm d" id="uDel">删除</button></div>'
+      + '<div class="tw"><table><thead><tr><th></th><th>ID</th><th>名称</th><th>状态</th><th>并行上限</th><th title="最近 5 分钟有连接的不同 IP 数">在线 IP</th><th>24 小时连接</th><th>最后在线</th><th>订阅链接</th></tr></thead><tbody>' + (rows || '<tr><td colspan="9" class="mut">' + (d.total ? '没有匹配的用户' : '还没有用户：在上面批量生成') + '</td></tr>') + '</tbody></table></div>'
+      + '<div class="row" style="margin-top:8px;gap:8px"><span class="mut">' + statsNote + '</span><span class="sp"></span><button class="btn sm" id="uPrev" ' + (page <= 1 ? 'disabled' : '') + '>上一页</button><span class="mut">' + page + ' / ' + pages + '</span><button class="btn sm" id="uNext" ' + (page >= pages ? 'disabled' : '') + '>下一页</button></div>'
+      + '<p class="mut">并行上限按"同时在线的不同 IP"计（IPv6 按 /64）：超过后，先连上的设备保留，多出来的新连接被拒绝。同一台设备同时有 IPv4 和 IPv6 会算 2 个，手机切换网络时旧 IP 约 5 分钟后释放，所以一个人建议设 2。</p></div>';
+  }
+  async function usersLoad() {
+    const qs = 'users?offset=' + U.offset + '&limit=' + U.limit + (U.q ? '&q=' + encodeURIComponent(U.q) : '');
+    U.data = await api(qs);
+    usersPaint();
+  }
+  function usersPaint() {
+    const root = $('#usersRoot'); if (!root) return;
+    root.innerHTML = usersHtml();
+    usersBind(root);
+  }
+  function usersInit(root) {
+    if (U.data) usersPaint();
+    usersLoad().catch((e) => { const r = $('#usersRoot'); if (r) r.innerHTML = '<div class="card"><p class="mut">加载失败：' + h(e.message) + '</p></div>'; });
+  }
+  function usersBind(root) {
+    const on = (id, fn) => { const el = $('#' + id, root); if (el) el.addEventListener('click', run(fn)); };
+    root.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
+      const v = b.dataset.copy;
+      (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(() => toast('已复制'), () => toast('复制失败，请手动选择'));
+    }));
+    const pushMsg = (r) => (r.push && r.push.errors && Object.keys(r.push.errors).length ? '（' + Object.keys(r.push.errors).length + ' 个账号下发失败，看上面的状态）' : '');
+    const sel = () => { if (!U.picked.size) { toast('先勾选用户'); return null; } return [...U.picked]; };
+    const upd = async (body, msg) => { const ids = sel(); if (!ids) return; const r = await api('users/update', 'POST', { ids, ...body }); toast(msg + ' ' + r.updated + ' 个' + pushMsg(r)); await usersLoad(); };
+    on('uCreate', async () => {
+      const lim = $('#uLimit', root).value.trim();
+      const r = await api('users/create', 'POST', { count: Number($('#uCount', root).value), prefix: $('#uPrefix', root).value, limit: lim === '' ? null : Number(lim) });
+      U.made = r.created.map((u) => (u.name ? u.name + ' ' : '') + u.sub).join('\n');
+      U.offset = 0; toast('已生成 ' + r.created.length + ' 个' + pushMsg(r)); await usersLoad();
+    });
+    on('uSearch', async () => { U.q = $('#uQ', root).value.trim(); U.offset = 0; await usersLoad(); });
+    const q = $('#uQ', root); if (q) q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#uSearch', root).click(); } });
+    on('uStats', async () => { U.stats = await api('users/stats', 'POST', {}); usersPaint(); });
+    on('uSync', async () => { const r = await api('users/sync', 'POST', {}); toast('已同步：在线 ' + r.online + '，超限 ' + r.over + (Object.keys(r.errors || {}).length ? '，' + Object.keys(r.errors).length + ' 个账号出错' : '')); await usersLoad(); });
+    on('uPrev', async () => { U.offset = Math.max(0, U.offset - U.limit); await usersLoad(); });
+    on('uNext', async () => { U.offset += U.limit; await usersLoad(); });
+    on('uBan', () => upd({ banned: true }, '已封禁'));
+    on('uUnban', () => upd({ banned: false }, '已解封'));
+    on('uApplyLimit', () => { const v = $('#uSetLimit', root).value.trim(); if (v === '') return toast('先填并行数（0 = 不限）'); return upd({ limit: Number(v) }, '已设置'); });
+    on('uDefLimit', () => upd({ limit: null }, '已恢复默认'));
+    on('uDel', async () => { const ids = sel(); if (!ids) return; if (!confirm('删除选中的 ' + ids.length + ' 个用户？他们的链接会立即失效，且无法恢复。')) return; const r = await api('users/delete', 'POST', { ids }); U.picked.clear(); toast('已删除 ' + r.removed + ' 个' + pushMsg(r)); await usersLoad(); });
+    on('uCopySel', () => {
+      const ids = sel(); if (!ids) return;
+      const set = new Set(ids);
+      const text = U.data.users.filter((u) => set.has(u.id)).map((u) => (u.name ? u.name + ' ' : '') + u.sub).join('\n');
+      if (!text) return toast('选中的用户不在本页');
+      return (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast('已复制本页选中的链接'), () => toast('复制失败'));
+    });
+    root.querySelectorAll('[data-upick]').forEach((c) => c.addEventListener('change', () => { if (c.checked) U.picked.add(c.dataset.upick); else U.picked.delete(c.dataset.upick); usersPaint(); }));
+    const all = $('#uPickAll', root);
+    if (all) all.addEventListener('change', () => { U.data.users.forEach((u) => (all.checked ? U.picked.add(u.id) : U.picked.delete(u.id))); usersPaint(); });
+    root.querySelectorAll('[data-uname]').forEach((i) => i.addEventListener('change', run(async () => { await api('users/update', 'POST', { ids: [i.dataset.uname], name: i.value }); toast('已改名'); })));
+    root.querySelectorAll('[data-setup]').forEach((b) => b.addEventListener('click', run(async () => {
+      toast('配置中…（建 KV、加绑定、重新部署）');
+      const r = await api('users/setup', 'POST', { id: b.dataset.setup });
+      toast(r.ready ? '已就绪' + (r.meta.redeployed ? '，节点正在重新部署（约 1 分钟）' : '') : '未完成：' + (r.meta.err || '见状态'));
+      await usersLoad();
+    })));
+    root.querySelectorAll('[data-msetup-reset]').forEach((b) => b.addEventListener('click', run(async () => {
+      if (!confirm('清除这个账号的配置记录？（不会删除 Cloudflare 上的 KV 和绑定）')) return;
+      await api('users/setup', 'POST', { id: b.dataset.msetupReset, reset: true }); await usersLoad();
+    })));
+    root.querySelectorAll('[data-mbound]').forEach((c) => c.addEventListener('change', run(async () => {
+      await api('users/setup', 'POST', { id: c.dataset.mbound, manualBound: c.checked }); toast(c.checked ? '已标记为手动绑定' : '已取消'); await usersLoad();
+    })));
+  }
   const ICONS = {
+    users: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/><path d="M17.5 4.5l1.5 1.5 3-3"/>',
     overview: '<path d="M3 12l9-8 9 8M5 10v10h14V10"/>',
     accounts: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M17 11a3 3 0 100-6M21 20c0-2.6-1.7-4.8-4-5.6"/>',
     quota: '<path d="M12 3a9 9 0 109 9h-9z"/><path d="M15 3.5A9 9 0 0120.5 9H15z"/>',
@@ -512,13 +631,15 @@ function clientMain() {
     system: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
   };
   // 页面顺序：日常（概览 / 账号 / 额度）→ 节点与订阅（来源 / 参数 / 订阅规则）→ 运维（通知日志 / 检测工具 / 系统）
-  const PAGES = { overview: ['概览', pgOverview], accounts: ['账号', pgAccounts], quota: ['额度', pgQuota], sources: ['节点来源', pgSources], node: ['节点参数', pgNode], sub: ['订阅与规则', pgSub], notify: ['通知与日志', pgNotify], tools: ['检测工具', pgNet], system: ['系统', pgSystem] };
+  const PAGES = { overview: ['概览', pgOverview], accounts: ['账号', pgAccounts], users: ['用户', pgUsers], quota: ['额度', pgQuota], sources: ['节点来源', pgSources], node: ['节点参数', pgNode], sub: ['订阅与规则', pgSub], notify: ['通知与日志', pgNotify], tools: ['检测工具', pgNet], system: ['系统', pgSystem] };
   const OLD_TABS = { pref: 'sources', net: 'tools', adv: 'system' }; // 旧版记住的页名
 
   function render() {
     tab = OLD_TABS[tab] || tab;
-    if (!PAGES[tab]) tab = 'overview';
-    $('nav').innerHTML = Object.entries(PAGES).map(([k, [n]]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><svg viewBox="0 0 24 24">${ICONS[k]}</svg><span>${n}</span></button>`).join('');
+    // 「用户」页只在系统设置里开启多用户后出现
+    const shown = (k) => k !== 'users' || !!S.settings.users?.enabled;
+    if (!PAGES[tab] || !shown(tab)) tab = 'overview';
+    $('nav').innerHTML = Object.entries(PAGES).filter(([k]) => shown(k)).map(([k, [n]]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><svg viewBox="0 0 24 24">${ICONS[k]}</svg><span>${n}</span></button>`).join('');
     const main = $('main');
     main.innerHTML = `<div class="top"><h1>${PAGES[tab][0]}</h1><span class="sub-h">${h(S.host || '')}</span></div>` + PAGES[tab][1]();
     buildToc(main);
@@ -592,6 +713,7 @@ function clientMain() {
   window.addEventListener('resize', () => syncToc());
 
   function bind(root) {
+    if ($('#usersRoot', root)) usersInit(root);
     // 改动追踪：设置页有未保存的改动时才显示底部保存栏（显示改了几项）；离开页面前提醒
     dirty = false;
     const bar = $('#saveBar', root);

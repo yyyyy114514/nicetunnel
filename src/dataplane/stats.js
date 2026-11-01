@@ -6,7 +6,7 @@ const RECENT_MAX = 12;
 let s = fresh();
 
 function fresh() {
-  return { since: 0, ws: 0, post: 0, guardBlocked: 0, authFail: 0, regionErr: 0, chainOk: 0, chainFail: 0, noSocket: 0, fails: 0, recent: [] };
+  return { since: 0, ws: 0, post: 0, guardBlocked: 0, authFail: 0, regionErr: 0, chainOk: 0, chainFail: 0, noSocket: 0, muOk: 0, muDeny: 0, fails: 0, recent: [] };
 }
 
 export function resetStats() { s = fresh(); }
