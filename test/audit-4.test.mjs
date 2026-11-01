@@ -125,3 +125,21 @@ test('Pages 绑定：带上项目原有的 KV / AE 绑定，不会被整段替�
   assert.deepEqual(Object.keys(prod.kv_namespaces).sort(), ['NT_MU', 'OTHER']);
   assert.deepEqual(Object.keys(prod.analytics_engine_datasets).sort(), ['MINE', 'NT_AE']);
 });
+
+test('Pages 项目列表：不带 per_page（CF 会报 400），按页翻到第 2 页也能找到', async () => {
+  const urls = [];
+  const fetchFn = async (url, init = {}) => {
+    const u = String(url);
+    urls.push(u);
+    const ok = (result, info) => new Response(JSON.stringify({ success: true, result, ...(info ? { result_info: info } : {}) }));
+    if (u.includes('/storage/kv/namespaces?')) return ok([{ id: 'ns1', title: 'nicetunnel-mu' }]);
+    if (/per_page/.test(u) && u.includes('/pages/projects')) return new Response(JSON.stringify({ success: false, errors: [{ message: 'Invalid list options provided.' }] }), { status: 400 });
+    if (u.includes('/pages/projects?page=1')) return ok([{ name: 'other', subdomain: 'other.pages.dev', domains: ['x.com'] }], { page: 1, total_pages: 2 });
+    if (u.includes('/pages/projects?page=2')) return ok([{ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], canonical_deployment: { id: 'd1' } }], { page: 2, total_pages: 2 });
+    return ok({});
+  };
+  const meta = await setupAccount({ account: { id: 'a', hosts: ['n1.com'], auth: { apiToken: 't'.repeat(40) } }, cfId: HEX(1), fetchFn, now: 1 });
+  assert.equal(meta.err, '');
+  assert.equal(meta.project, 'p');
+  assert.ok(!urls.some((u) => u.includes('/pages/projects?per_page')));
+});

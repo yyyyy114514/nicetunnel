@@ -165,9 +165,17 @@ export async function setupAccount({ account, cfId, fetchFn, now, prev = {}, red
   }
   // 2) Pages 项目绑定
   if (!meta.bound) {
-    const pl = await cfApi(fetchFn, account, 'GET', `/accounts/${cfId}/pages/projects?per_page=100`);
-    if (!pl.ok) return { ...meta, manual: true, err: '读取 Pages 项目失败：' + pl.error + permHint(pl, 'Cloudflare Pages: Edit') };
-    const proj = findPagesProject(pl.json?.result, account.hosts);
+    // Pages 项目列表不接受 per_page=100（报 400 Invalid list options），按默认页大小逐页翻，找到就停
+    let proj = null;
+    for (let page = 1; page <= 10 && !proj; page++) {
+      const pl = await cfApi(fetchFn, account, 'GET', `/accounts/${cfId}/pages/projects?page=${page}`);
+      if (!pl.ok) return { ...meta, manual: true, err: '读取 Pages 项目失败：' + pl.error + permHint(pl, 'Cloudflare Pages: Edit') };
+      const list = Array.isArray(pl.json?.result) ? pl.json.result : [];
+      proj = findPagesProject(list, account.hosts);
+      const info = pl.json?.result_info || {};
+      const last = !list.length || (info.total_pages ? page >= info.total_pages : info.count !== undefined && info.per_page !== undefined && info.count < info.per_page);
+      if (last) break;
+    }
     if (!proj) return { ...meta, manual: true, err: '没找到承载这个账号域名的 Pages 项目（Worker 部署的节点需要手动绑定）' };
     meta.project = proj.name;
     // 把项目原有的同类绑定一起带上：不管这个接口是合并还是整段替换，都不会覆盖掉别的 KV / AE 绑定
