@@ -21,7 +21,7 @@ async function loadState(env, now) {
     try {
       const raw = await kv.get(MU_STATE_KEY);
       const s = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
-      iso.state = s && typeof s.secret === 'string' && s.secret.length >= 32 ? s : null;
+      iso.state = s && typeof s.key === 'string' && s.key.length >= 32 ? s : null;
       iso.lastErr = iso.state ? '' : 'no_state';
     } catch (e) {
       iso.lastErr = 'read_failed';
@@ -66,7 +66,7 @@ export async function muCheck(request, env, url, ip, now = Date.now()) {
   const st = await loadState(env, now);
   if (!st) return { ok: false, reason: iso.lastErr || 'no_state' };
   if (st.on === false) return { ok: false, reason: 'disabled' };
-  const tag = await ipTag(st.secret, ip);
+  const tag = await ipTag(st.key, ip);
   const colo = request.cf?.colo || '';
   // ids 是可用用户的名单：删除的、封禁的都不在里面
   if (!idSet(st).has(id)) return { ok: false, reason: 'banned' };
@@ -77,7 +77,7 @@ export async function muCheck(request, env, url, ip, now = Date.now()) {
   if (!allowed) return { ok: false, reason: 'over_limit' };
   const next = new URL(url.href);
   next.pathname = url.pathname.slice(m[0].length) || '/';
-  return { ok: true, id, uuid: await userUuid(st.secret, id), url: next };
+  return { ok: true, id, uuid: await userUuid(st.key, id), url: next };
 }
 
 /** 检测节点时显示（/version?stats=1）：绑定是否就绪、状态是否读到 */

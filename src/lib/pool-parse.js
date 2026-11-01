@@ -16,15 +16,31 @@ const CHAIN_RE = /\$?\s*(socks5|http|https|turn|sstp):\/\/([^#\s$]+)/i;
 const ADDR_RE = /^(\[[\da-fA-F:]+\]|[\d.]+|[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*)(?::(\d+))?$/;
 
 const MAX_RE_LEN = 200;
-const MAX_UNBOUNDED = 3;
+/** 量词（* + ? {n} {n,m} {n,}，懒惰标记不算）合计上限：有上限的 {0,96} 叠几个也能卡死，所以一起算 */
+const MAX_QUANTIFIERS = 3;
+/** 分支 | 的上限：(a|a)(a|a)… 每多一组回溯翻倍 */
+const MAX_ALTERNATIONS = 3;
 /** 节点名称参与正则匹配的最大长度（名称本来就短；限制长度让最坏情况的回溯也有上限） */
-export const MAX_REGION_NAME_LEN = 96;
+export const MAX_REGION_NAME_LEN = 64;
+
+/** 数一个（已去掉转义和字符类的）正则里有几个量词 */
+function countQuantifiers(flat) {
+  let n = 0;
+  for (let i = 0; i < flat.length; i++) {
+    const c = flat[i];
+    if (c === '*' || c === '+') n++;
+    else if (c === '?') { const p = flat[i - 1]; if (p !== '(' && p !== '*' && p !== '+' && p !== '?' && p !== '}') n++; }
+    else if (c === '{') { const m = /^\{\d+(?:,\d*)?\}/.exec(flat.slice(i)); if (m) { n++; i += m[0].length - 1; } }
+  }
+  return n;
+}
 
 /**
  * 地区正则的风险检查（主站保存设置、节点解析路径参数都用它）。返回原因，安全时返回 ''。
- * 不靠认"危险写法"（总有绕过，例如 ((a+))+ 、(a|a)+），而是只允许一个安全子集：
- * 分组后面不能跟 * + {n,m}（可选的 ? 可以）；不能有反向引用；不限次数的量词（* + {n,}）最多 3 个。
- * 这样不会有指数级回溯；多项式回溯再配合名称长度上限，最坏也只是毫秒级。
+ * 不靠认"危险写法"（总有绕过，例如 ((a+))+ 、(a|a)+、a{0,96} 叠六个），而是只允许一个很小的安全子集：
+ * 分组后面不能跟 * + {n,m}（可选的 ? 可以）；不能有反向引用；所有量词合计最多 3 个；| 最多 3 个。
+ * 这样回溯量最多是"名称长度的 3 次方 × 8"，名称又截到 64 个字符，最坏也只是毫秒级。
+ * 注意节点端的正则和被匹配的列表都可能来自持有 UUID 的订阅用户，所以上限必须是硬的。
  */
 export function regexRisk(src) {
   const s = String(src || '');
@@ -32,7 +48,8 @@ export function regexRisk(src) {
   if (/\\[1-9]|\\k</.test(s)) return '含反向引用';
   const flat = s.replace(/\\./g, 'E').replace(/\[(?:\\.|[^\]\\])*\]/g, 'C');
   if (/\)\s*(?:[*+]|\{\d*,?\d*\})/.test(flat)) return '分组后面不能跟 * + {n,m}';
-  if ((flat.match(/[*+]|\{\d+,\}/g) || []).length > MAX_UNBOUNDED) return `不限次数的量词超过 ${MAX_UNBOUNDED} 个`;
+  if (countQuantifiers(flat) > MAX_QUANTIFIERS) return `量词（* + ? {n,m}）超过 ${MAX_QUANTIFIERS} 个`;
+  if ((flat.match(/\|/g) || []).length > MAX_ALTERNATIONS) return `分支 | 超过 ${MAX_ALTERNATIONS} 个`;
   return '';
 }
 

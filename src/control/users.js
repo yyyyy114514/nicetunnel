@@ -5,17 +5,18 @@
 //   nt.users        用户列表 [{id, name, limit, banned, createdAt}]
 //   nt.mu.secret    签名密钥（首次使用时随机生成，永不改变；改了所有用户链接都会失效）
 //   nt.mu.accounts  各节点账号的配置结果 {账号id: {cfId, nsId, project, bound, manual, err, at}}
-//   nt.mu.sync      上次下发 {sig, over, at, pushed:{账号id: sig}, errors}
-//   nt.mu.state     下发给数据面的状态（主站自己的数据面直接读这里；节点账号各自 KV 里一份）
+//   nt.mu.state     下发状态 + 同步记录（主站自己的数据面直接读这里；节点账号 KV 里只有状态部分）
+//                   {v, on, key, ids, over, sig, at, overAt, pushed:{账号id: sig}, errors, day, writes, pushN}
 import {
   MU_STATE_KEY, MU_KV_BINDING, MU_AE_BINDING, MU_KV_TITLE, MU_DATASET, MU_ONLINE_WINDOW_MIN,
-  newUserId, newSecret, userUuid, userSubToken, userSubSig, parseSubToken,
+  newUserId, newSecret, userUuid, userSubToken, userSubSig, parseSubToken, nodeKeyOf,
 } from '../lib/mu.js';
 import { authAttempts } from './usage.js';
 import { hash32 } from '../lib/rand.js';
 import { safeEqual } from './auth.js';
 
-export const MU_KEYS = { users: 'nt.users', secret: 'nt.mu.secret', accounts: 'nt.mu.accounts', sync: 'nt.mu.sync' };
+// sync 与下发状态合成一个键：每次变化主站只写一次 KV
+export const MU_KEYS = { users: 'nt.users', secret: 'nt.mu.secret', accounts: 'nt.mu.accounts', sync: MU_STATE_KEY };
 export const MAX_USERS = 5000;
 export const MAX_BATCH = 500;
 export const MAX_LIMIT = 50;
@@ -86,7 +87,7 @@ export async function verifySubToken({ store, settings, token }) {
   const user = (await getUsers(store)).find((u) => u.id === t.id);
   if (!user) return { ok: false, code: 'bad_token' };
   if (user.banned) return { ok: false, code: 'banned' };
-  return { ok: true, user, uuid: await userUuid(secret, t.id), token: String(token) };
+  return { ok: true, user, uuid: await userUuid(await nodeKeyOf(secret), t.id), token: String(token) };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +170,12 @@ export async function setupAccount({ account, cfId, fetchFn, now, prev = {}, red
     const proj = findPagesProject(pl.json?.result, account.hosts);
     if (!proj) return { ...meta, manual: true, err: '没找到承载这个账号域名的 Pages 项目（Worker 部署的节点需要手动绑定）' };
     meta.project = proj.name;
-    const patch = { deployment_configs: { production: { kv_namespaces: { [MU_KV_BINDING]: { namespace_id: meta.nsId } }, analytics_engine_datasets: { [MU_AE_BINDING]: { dataset: MU_DATASET } } } } };
+    // 把项目原有的同类绑定一起带上：不管这个接口是合并还是整段替换，都不会覆盖掉别的 KV / AE 绑定
+    const prod = proj.deployment_configs?.production || {};
+    const patch = { deployment_configs: { production: {
+      kv_namespaces: { ...(prod.kv_namespaces || {}), [MU_KV_BINDING]: { namespace_id: meta.nsId } },
+      analytics_engine_datasets: { ...(prod.analytics_engine_datasets || {}), [MU_AE_BINDING]: { dataset: MU_DATASET } },
+    } } };
     const up = await cfApi(fetchFn, account, 'PATCH', `/accounts/${cfId}/pages/projects/${encodeURIComponent(proj.name)}`, patch);
     if (!up.ok) return { ...meta, manual: true, err: '添加绑定失败：' + up.error + permHint(up, 'Cloudflare Pages: Edit') };
     meta.bound = true;
@@ -243,10 +249,24 @@ export function computeOver(users, settings, byUser, prevOver = {}) {
 }
 
 /** 下发给数据面的状态：只列出可用的用户（删除和封禁的都不在里面） */
-export function buildState({ secret, users, settings, over }) {
+/**
+ * 下发给数据面的状态：只列出可用的用户（删除和封禁的都不在里面）。
+ * key 是由主密钥派生的节点密钥（HMAC(主密钥, "node")），只能算用户 UUID 和 IP 标记；
+ * 订阅令牌用主密钥签，主密钥只在主站 KV —— 某个节点账号的 KV 泄露也伪造不了订阅链接。
+ */
+export function buildState({ nodeKey, users, settings, over }) {
   const on = !!settings?.users?.enabled;
-  return { v: 1, on, secret, ids: on ? users.filter((u) => !u.banned).map((u) => u.id).sort() : [], over: on ? over || {} : {} };
+  return { v: 2, on, key: nodeKey, ids: on ? users.filter((u) => !u.banned).map((u) => u.id).sort() : [], over: on ? over || {} : {} };
 }
+
+/** 只有超限名单变化时，最快多久下发一次（可用名单 / 开关变化总是立即下发） */
+export const OVER_PUSH_MS = 5 * 60e3;
+/** 只有错误信息变化时，最快多久记一次 */
+const ERROR_WRITE_MS = 30 * 60e3;
+/** 每天超限名单变化最多下发多少次（主站和每个节点账号各算；免费 KV 每天 1000 次写入，还要留给设置、用量等） */
+export const OVER_PUSH_DAILY_MAX = 200;
+const utcDayOf = (t) => new Date(t).toISOString().slice(0, 10);
+const sameList = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
 export const stateSig = (state) => hash32(JSON.stringify(state)).toString(16);
 
 /**
@@ -256,7 +276,12 @@ export const stateSig = (state) => hash32(JSON.stringify(state)).toString(16);
 export async function syncUsers({ store, settings, accounts, usage, fetchFn = globalThis.fetch, now = Date.now(), query = true }) {
   const [users, secret, metas, prev] = await Promise.all([getUsers(store), getMuSecret(store), store.getJson(MU_KEYS.accounts, 30e3), store.getJson(MU_KEYS.sync, 10e3)]);
   const meta = metas || {};
-  const last = prev || { sig: '', over: {}, pushed: {}, errors: {} };
+  const nodeKey = await nodeKeyOf(secret);
+  const last = prev && prev.sig ? prev : { sig: '', over: {}, pushed: {}, errors: {} };
+  const day = utcDayOf(now);
+  const sameDay = last.day === day;
+  const writes = sameDay ? last.writes || 0 : 0;
+  const pushN = sameDay ? { ...(last.pushN || {}) } : {};
   const targets = (accounts || []).filter((a) => meta[a.id]?.nsId && cfAccountIdOf(a, usage) && a.enabled !== false).slice(0, MAX_SYNC_ACCOUNTS);
   const errors = {};
   let over = last.over || {};
@@ -271,20 +296,31 @@ export async function syncUsers({ store, settings, accounts, usage, fetchFn = gl
       over = computeOver(users, settings, byUser, last.over);
     }
   }
-  const state = buildState({ secret, users, settings, over });
+  // 写入节流：可用名单 / 开关 / 节点密钥变了立即下发（封禁、删除要马上生效）；只有超限名单变了，
+  // 最快 5 分钟一次，且每天有上限——用户在上限附近进进出出时名单可能每分钟都变，不节流会写满 KV 的每日额度
+  let state = buildState({ nodeKey, users, settings, over });
+  const urgent = !last.sig || state.on !== last.on || state.key !== last.key || !sameList(state.ids, last.ids);
+  const overChanged = JSON.stringify(state.over) !== JSON.stringify(last.over || {});
+  let overAt = last.overAt || 0;
+  if (!urgent && overChanged) {
+    const budgetLeft = writes < OVER_PUSH_DAILY_MAX && targets.every((a) => (pushN[a.id] || 0) < OVER_PUSH_DAILY_MAX);
+    if (now - overAt < OVER_PUSH_MS || !budgetLeft) state = buildState({ nodeKey, users, settings, over: last.over || {} });
+    else overAt = now;
+  } else if (overChanged) overAt = now;
+  over = state.over;
   const sig = stateSig(state);
   const pushed = { ...(last.pushed || {}) };
   const done = [];
   const body = JSON.stringify(state);
-  if (sig !== last.sig && store.kvBound) await store.putJson(MU_STATE_KEY, state, 60e3);
   await Promise.all(targets.filter((a) => pushed[a.id] !== sig).map(async (a) => {
     const cfId = cfAccountIdOf(a, usage);
     const r = await cfApi(fetchFn, a, 'PUT', `/accounts/${cfId}/storage/kv/namespaces/${meta[a.id].nsId}/values/${encodeURIComponent(MU_STATE_KEY)}`, body, { contentType: 'text/plain' });
-    if (r.ok) { pushed[a.id] = sig; done.push(a.id); } else errors[a.id] = (errors[a.id] ? errors[a.id] + '；' : '') + 'KV 写入：' + r.error + permHint(r, 'Workers KV Storage: Edit');
+    if (r.ok) { pushed[a.id] = sig; pushN[a.id] = (pushN[a.id] || 0) + 1; done.push(a.id); } else errors[a.id] = (errors[a.id] ? errors[a.id] + '；' : '') + 'KV 写入：' + r.error + permHint(r, 'Workers KV Storage: Edit');
   }));
-  const errSig = JSON.stringify(errors);
-  const changed = sig !== last.sig || done.length > 0 || errSig !== JSON.stringify(last.errors || {});
-  if (changed && store.kvBound) await store.putJson(MU_KEYS.sync, { sig, over, at: now, pushed, errors }, 10e3);
+  // 主站只写一个键（状态 + 同步记录）。只有错误信息变了：最快 30 分钟记一次
+  const errChanged = JSON.stringify(errors) !== JSON.stringify(last.errors || {});
+  const changed = sig !== last.sig || done.length > 0 || (errChanged && now - (last.at || 0) >= ERROR_WRITE_MS);
+  if (changed && store.kvBound) await store.putJson(MU_KEYS.sync, { ...state, sig, at: now, overAt, pushed, errors, day, writes: writes + 1, pushN }, 10e3);
   return { changed, pushed: done, errors, online: onlineCount, over: Object.keys(over).length };
 }
 

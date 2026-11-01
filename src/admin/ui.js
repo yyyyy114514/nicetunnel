@@ -536,7 +536,7 @@ function clientMain() {
     const statsNote = U.stats ? '统计范围：' + U.stats.accounts + ' 个账号' + (Object.keys(U.stats.errors || {}).length ? '，' + Object.keys(U.stats.errors).length + ' 个查询失败：' + h(Object.values(U.stats.errors)[0]) : '') : '点「刷新在线」查询（每个已配置账号 2 次 Analytics Engine 查询）';
     return '<div class="card"><h2><i></i>节点账号配置<span class="sp"></span><button class="btn sm" id="uSync">立即同步</button></h2>'
       + '<p class="mut" style="margin:0 0 10px">每个节点账号要有 KV 绑定 <code>NT_MU</code>（命名空间 nicetunnel-mu）和 Analytics Engine 绑定 <code>NT_AE</code>（数据集 nicetunnel_mu），加完重新部署一次。「自动配置」用账号的 Token 完成这些，Token 需要 <b>Workers KV Storage: Edit</b>、<b>Cloudflare Pages: Edit</b>、<b>Account Analytics: Read</b> 权限。自动配置失败时按上面的名字在 Pages 项目「设置 → 绑定」里手动加，再勾「已手动绑定」。'
-      + '主站 Worker 建议再加一个每分钟的 Cron 触发器 <code>* * * * *</code>（保留原来的 <code>*/5 * * * *</code>），并行限制约 2~4 分钟生效；不加则最慢 5 分钟同步一次。</p>'
+      + '主站 Worker 建议再加一个每分钟的 Cron 触发器 <code>* * * * *</code>（保留原来的 <code>*/5 * * * *</code>）。封禁约 1~2 分钟生效；并行超限约 2~7 分钟（超限名单最快 5 分钟下发一次，省 KV 写入额度）。不加触发器则最慢 5 分钟同步一次。原来的共享订阅仍然有效，不受这里的封禁和并行限制。</p>'
       + '<div class="tw"><table><thead><tr><th>账号</th><th title="Cloudflare Account ID">CF 账号</th><th>状态</th><th></th></tr></thead><tbody>' + (acc || '<tr><td colspan="4" class="mut">还没有节点账号</td></tr>') + '</tbody></table></div>'
       + '<p class="mut">' + readyN + ' / ' + d.accounts.length + ' 个账号就绪。用户订阅只分配到就绪的账号；一个都没有时用主站自己。' + (d.sync ? '上次同步 ' + fmtT(d.sync.at) + '，超限用户 ' + d.sync.over + ' 个' + (d.sync.errors ? '，' + d.sync.errors + ' 个账号出错' : '') + '。' : '') + '</p></div>'
       + '<div class="card"><h2><i></i>批量生成</h2><div class="row" style="gap:8px;align-items:flex-end">'

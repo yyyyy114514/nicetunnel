@@ -1,8 +1,8 @@
 // 多用户凭据：主站和节点共用的算法与常量（不读写任何存储）。
 //
 // 每个用户一条永久链接。节点路径前缀 /_u<用户ID>，该用户的 UUID / Trojan 密码 / SS 密钥都由
-// HMAC(密钥, 用户ID) 算出——节点拿到路径里的用户 ID 自己算一遍就能验证，不需要用户名单、不发请求。
-// 密钥只存在主站 KV 和各节点账号的 KV（主站推送），不写进任何链接。
+// HMAC(节点密钥, 用户ID) 算出——节点拿到路径里的用户 ID 自己算一遍就能验证，不需要用户名单、不发请求。
+// 主密钥只在主站 KV（签订阅令牌）；节点账号 KV 里只有派生出的节点密钥。都不写进任何链接。
 //
 // 在线统计与并行限制：节点把"用户 + IP 标记"写进本账号的 Analytics Engine（NT_AE），主站定时汇总所有账号，
 // 算出封禁名单和超限用户允许的 IP，写进各节点账号的 KV（NT_MU）。节点每分钟读一次，在内存里判断。
@@ -50,7 +50,13 @@ async function memoHmac(secret, msg) {
   return v;
 }
 
-/** 用户的 UUID（同时作为 Trojan 密码、SS 密钥的来源）。保持 UUID v4 格式，客户端都认 */
+/**
+ * 节点密钥：由主密钥派生，下发给节点账号 KV。只用来算用户 UUID 和 IP 标记；
+ * 订阅签名只用主密钥（不下发），节点账号 KV 泄露也伪造不了订阅链接。
+ */
+export const nodeKeyOf = (masterSecret) => memoHmac(masterSecret, 'node');
+
+/** 用户的 UUID（同时作为 Trojan 密码、SS 密钥的来源）。保持 UUID v4 格式，客户端都认。key 是节点密钥 */
 export async function userUuid(secret, id) {
   const h = await memoHmac(secret, 'uuid:' + id);
   return [h.slice(0, 8), h.slice(8, 12), '4' + h.slice(13, 16), ((parseInt(h[16], 16) & 3) | 8).toString(16) + h.slice(17, 20), h.slice(20, 32)].join('-');

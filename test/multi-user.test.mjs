@@ -5,7 +5,7 @@ import worker from '../src/index.js';
 import { resetStoreState, createStore } from '../src/control/store.js';
 import { resetPipelineState } from '../src/control/pipeline.js';
 import { deriveIdentity, authCookieValue, UUID_RE } from '../src/control/identity.js';
-import { userUuid, userSubToken, parseSubToken, ipKey, ipTag, MU_STATE_KEY, newUserId } from '../src/lib/mu.js';
+import { userUuid, userSubToken, parseSubToken, ipKey, ipTag, MU_STATE_KEY, newUserId, nodeKeyOf } from '../src/lib/mu.js';
 import { muCheck, resetMuGuard } from '../src/dataplane/mu-guard.js';
 import { computeOver, mergeOnline, buildState, syncUsers, MU_KEYS, findPagesProject, setupAccount } from '../src/control/users.js';
 import { runScheduled, MU_CRON } from '../src/control/cron.js';
@@ -43,7 +43,7 @@ const req = (path, ip = '1.1.1.1') => new Request('https://n1.example.com' + pat
 test('节点：可用用户放行并换成他的 UUID、去掉前缀；删除 / 封禁 / 关闭 / 没有状态都拒绝；普通路径不管', async () => {
   const points = [];
   const ae = { writeDataPoint: (p) => points.push(p) };
-  const env = nodeEnv({ v: 1, on: true, secret: SECRET, ids: ['aaaa1111'], over: {} }, ae);
+  const env = nodeEnv({ v: 2, on: true, key: SECRET, ids: ['aaaa1111'], over: {} }, ae);
   const url = new URL('https://n1.example.com/_uaaaa1111/proxyip=1.2.3.4?ed=2560');
   const r = await muCheck(req(url.pathname), env, url, '1.1.1.1', 1000);
   assert.equal(r.ok, true);
@@ -63,7 +63,7 @@ test('节点：可用用户放行并换成他的 UUID、去掉前缀；删除 / 
   assert.equal(await muCheck(req('/?ed=2560'), env, new URL('https://n1.example.com/?ed=2560'), '1.1.1.1'), null);
   // 关闭
   resetMuGuard();
-  const off = nodeEnv({ v: 1, on: false, secret: SECRET, ids: [], over: {} });
+  const off = nodeEnv({ v: 2, on: false, key: SECRET, ids: [], over: {} });
   assert.equal((await muCheck(req('/_uaaaa1111/'), off, new URL('https://n1.example.com/_uaaaa1111/'), '1.1.1.1')).reason, 'disabled');
   // 没绑定 KV
   resetMuGuard();
@@ -73,7 +73,7 @@ test('节点：可用用户放行并换成他的 UUID、去掉前缀；删除 / 
 test('节点：超限用户只放行允许的 IP；被拒的连接也上报（限制保持稳定）', async () => {
   const points = [];
   const tagA = await ipTag(SECRET, '1.1.1.1');
-  const env = nodeEnv({ v: 1, on: true, secret: SECRET, ids: ['aaaa1111'], over: { aaaa1111: [tagA] } }, { writeDataPoint: (p) => points.push(p) });
+  const env = nodeEnv({ v: 2, on: true, key: SECRET, ids: ['aaaa1111'], over: { aaaa1111: [tagA] } }, { writeDataPoint: (p) => points.push(p) });
   const u = new URL('https://n1.example.com/_uaaaa1111/');
   assert.equal((await muCheck(req(u.pathname, '1.1.1.1'), env, u, '1.1.1.1')).ok, true);
   assert.deepEqual(await muCheck(req(u.pathname, '9.9.9.9'), env, u, '9.9.9.9'), { ok: false, reason: 'over_limit' });
@@ -92,9 +92,9 @@ test('汇总：先到先得；上一轮放行的 IP 优先保留；单独设置�
   const users = [{ id: 'u1', limit: null }, { id: 'u2', limit: 1 }, { id: 'u3', limit: 0 }, { id: 'u4', limit: 1, banned: true }];
   assert.deepEqual(computeOver(users, settings, byUser, {}), { u1: ['a', 'c'], u2: ['x'] });
   assert.deepEqual(computeOver(users, settings, byUser, { u1: ['b', 'c'] }).u1, ['b', 'c'], '上一轮放行的保留');
-  const st = buildState({ secret: SECRET, users, settings, over: {} });
+  const st = buildState({ nodeKey: SECRET, users, settings, over: {} });
   assert.deepEqual(st.ids, ['u1', 'u2', 'u3']);
-  assert.deepEqual(buildState({ secret: SECRET, users, settings: settingsWith({}), over: {} }), { v: 1, on: false, secret: SECRET, ids: [], over: {} });
+  assert.deepEqual(buildState({ nodeKey: SECRET, users, settings: settingsWith({}), over: {} }), { v: 2, on: false, key: SECRET, ids: [], over: {} });
 });
 
 function cfFake({ online = [], pages = [] } = {}) {
@@ -152,7 +152,10 @@ test('同步：查 AE → 算超限 → 写主站 KV 和各节点账号 KV；没
   assert.deepEqual(st.over, { aaaa1111: ['tag1'] });
   const put = f.calls.find((c) => c.method === 'PUT');
   assert.ok(put.url.includes('/namespaces/ns1/values/nt.mu.state'));
-  assert.deepEqual(JSON.parse(put.body), st);
+  const { v, on, key, ids, over } = st;
+  assert.deepEqual(JSON.parse(put.body), { v, on, key, ids, over }, '节点账号只拿状态部分');
+  assert.equal(key, await nodeKeyOf(SECRET), '下发的是派生的节点密钥');
+  assert.ok(!put.body.includes(SECRET), '主密钥不下发');
   const r2 = await syncUsers({ store, settings: await store.getSettings(), accounts, usage: null, fetchFn: f, now: now + 60e3 });
   assert.equal(r2.changed, false);
   assert.equal(f.calls.filter((c) => c.method === 'PUT').length, 1);
@@ -187,7 +190,7 @@ test('后台 + 订阅：开启后批量生成 → 专属订阅用该用户的 UU
   assert.equal(r.status, 200);
   const text = atob((await r.text()).trim());
   const secret = kv.m.get(MU_KEYS.secret);
-  assert.ok(text.includes(await userUuid(secret, u0.id)), '用该用户的 UUID');
+  assert.ok(text.includes(await userUuid(await nodeKeyOf(secret), u0.id)), '用该用户的 UUID');
   assert.ok(!text.includes(id.uuid), '不出现共享 UUID');
   assert.ok(text.includes(encodeURIComponent('/_u' + u0.id)) || text.includes('/_u' + u0.id), '路径带前缀');
   // 伪造签名
