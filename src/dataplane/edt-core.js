@@ -2001,6 +2001,10 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			log(`[TCP转发] SOCKS5/HTTP/HTTPS/TURN/SSTP 代理连接失败: ${err.message}`);
 			throw err;
 		}
+	} else if (目标需走反代(host, portNum)) { // [NT-HOOK] 刚确认过要走反代的目标：跳过必然失败的直连，省一次往返和失败等待
+		log(`[TCP转发] ${host}:${portNum} 近期需走反代，跳过直连`);
+		await connecttoPry();
+		if (仅建立连接) return remoteConnWrapper.socket;
 	} else {
 		let 直连世代 = remoteConnWrapper.generation;
 		try {
@@ -2010,6 +2014,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			const initialSocket = await connectDirect(host, portNum, rawData, true);
 			await 安装当前连接(initialSocket, 直连世代, 世代连接.downlinkDrain, async () => {
 				if (remoteConnWrapper.generation !== 直连世代 || remoteConnWrapper.socket !== initialSocket) return;
+				记录目标需走反代(host, portNum); // [NT-HOOK]
 				await connecttoPry();
 			});
 			if (仅建立连接) return initialSocket;
@@ -2021,6 +2026,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 				throw err;
 			}
 			if (ws.readyState !== WebSocket.OPEN) throw err;
+			记录目标需走反代(host, portNum); // [NT-HOOK]
 			await connecttoPry();
 			if (仅建立连接) return remoteConnWrapper.socket;
 		}
@@ -4980,6 +4986,19 @@ function 记录反代结果(地址, 端口, 成功) {
 function 反代近期失败(地址, 端口) {
 	const t = 反代健康.get(String(地址).toLowerCase() + ':' + 端口);
 	return !!t && Date.now() - t < 反代失败冷却毫秒;
+}
+
+// [NT-HOOK] 反代目标记忆：Worker 连不了 Cloudflare 的 IP，访问套了 CF 的网站时上游每条连接都先直连、等它失败再走反代，
+// 多一次往返外加失败等待（客户端感觉"CF 网站特别慢"）。这里在本 isolate 内记住走过反代的目标，10 分钟内直接走反代。
+const 反代目标 = new Map();
+const 反代目标有效毫秒 = 10 * 60 * 1000;
+function 记录目标需走反代(主机, 端口) {
+	if (反代目标.size > 2048) 反代目标.clear();
+	反代目标.set(String(主机).toLowerCase() + ':' + 端口, Date.now());
+}
+function 目标需走反代(主机, 端口) {
+	const t = 反代目标.get(String(主机).toLowerCase() + ':' + 端口);
+	return !!t && Date.now() - t < 反代目标有效毫秒;
 }
 
 async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com', UUID = '00000000-0000-4000-8000-000000000000') {

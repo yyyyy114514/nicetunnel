@@ -48,3 +48,15 @@ test('补丁里不再有首包等待', async () => {
   assert.ok(!src.includes('等待反代首包') && !src.includes('首包可等待'));
 });
 
+
+test('走过反代的目标：下一条连接跳过直连，直接走反代（CF 网站每条连接省一次失败的直连）', async () => {
+  const raw = [];
+  const req = makeRequest({ '9.9.9.9': 'good', '8.8.8.8': 'good' }, raw);
+  const go = () => forward('shop.cf-hosted.example', 443, TLS_HELLO, { readyState: WebSocket.OPEN }, null, {}, UUID, req, { 反代IP: '9.9.9.9:443,8.8.8.8:443', 代理类型: null, 反代兜底: false }, false, null, true);
+  await go();
+  const first = raw.splice(0);
+  assert.ok(first.includes('shop.cf-hosted.example'), '第一次先试直连：' + JSON.stringify(first));
+  await go();
+  assert.ok(!raw.includes('shop.cf-hosted.example'), '第二次不再直连：' + JSON.stringify(raw));
+  assert.equal(raw.length, 1);
+});

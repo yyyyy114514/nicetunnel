@@ -185,5 +185,25 @@
     "label": "反代兜底：记录成败（连接失败的候选 5 分钟内排到最后）",
     "search": "\t\t\t\t\tawait 写入首包(socket, data);\n\t\t\t\t\tlog(`[反代连接] 成功连接到: ${candidate.hostname}:${candidate.port} (索引: ${candidate.index})`);\n\t\t\t\t\t反代数组索引 = candidate.index;\n\t\t\t\t\treturn socket;\n\t\t\t\t} catch (err) {\n\t\t\t\t\ttry { socket?.close?.() } catch (e) { }",
     "replace": "\t\t\t\t\tawait 写入首包(socket, data);\n\t\t\t\t\t记录反代结果(candidate.hostname, candidate.port, true); // [NT-HOOK]\n\t\t\t\t\tlog(`[反代连接] 成功连接到: ${candidate.hostname}:${candidate.port} (索引: ${candidate.index})`);\n\t\t\t\t\t反代数组索引 = candidate.index;\n\t\t\t\t\treturn socket;\n\t\t\t\t} catch (err) {\n\t\t\t\t\tfor (const c of (candidate ? [candidate] : 候选列表)) 记录反代结果(c.hostname, c.port, false); // [NT-HOOK]\n\t\t\t\t\ttry { socket?.close?.() } catch (e) { }"
+  },
+  {
+    "label": "反代目标记忆：走过反代的目标（Cloudflare 托管的网站）10 分钟内跳过直连",
+    "search": "\t} else {\n\t\tlet 直连世代 = remoteConnWrapper.generation;\n\t\ttry {\n\t\t\tlog(`[TCP转发] 尝试直连到: ${host}:${portNum}`);",
+    "replace": "\t} else if (目标需走反代(host, portNum)) { // [NT-HOOK] 刚确认过要走反代的目标：跳过必然失败的直连，省一次往返和失败等待\n\t\tlog(`[TCP转发] ${host}:${portNum} 近期需走反代，跳过直连`);\n\t\tawait connecttoPry();\n\t\tif (仅建立连接) return remoteConnWrapper.socket;\n\t} else {\n\t\tlet 直连世代 = remoteConnWrapper.generation;\n\t\ttry {\n\t\t\tlog(`[TCP转发] 尝试直连到: ${host}:${portNum}`);"
+  },
+  {
+    "label": "反代目标记忆：直连没回数据 / 直连失败时记下目标",
+    "search": "\t\t\t\tif (remoteConnWrapper.generation !== 直连世代 || remoteConnWrapper.socket !== initialSocket) return;\n\t\t\t\tawait connecttoPry();",
+    "replace": "\t\t\t\tif (remoteConnWrapper.generation !== 直连世代 || remoteConnWrapper.socket !== initialSocket) return;\n\t\t\t\t记录目标需走反代(host, portNum); // [NT-HOOK]\n\t\t\t\tawait connecttoPry();"
+  },
+  {
+    "label": "反代目标记忆：直连抛错时记下目标",
+    "search": "\t\t\tif (ws.readyState !== WebSocket.OPEN) throw err;\n\t\t\tawait connecttoPry();",
+    "replace": "\t\t\tif (ws.readyState !== WebSocket.OPEN) throw err;\n\t\t\t记录目标需走反代(host, portNum); // [NT-HOOK]\n\t\t\tawait connecttoPry();"
+  },
+  {
+    "label": "反代目标记忆（函数）",
+    "search": "async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com', UUID = '00000000-0000-4000-8000-000000000000') {",
+    "replace": "// [NT-HOOK] 反代目标记忆：Worker 连不了 Cloudflare 的 IP，访问套了 CF 的网站时上游每条连接都先直连、等它失败再走反代，\n// 多一次往返外加失败等待（客户端感觉\"CF 网站特别慢\"）。这里在本 isolate 内记住走过反代的目标，10 分钟内直接走反代。\nconst 反代目标 = new Map();\nconst 反代目标有效毫秒 = 10 * 60 * 1000;\nfunction 记录目标需走反代(主机, 端口) {\n\tif (反代目标.size > 2048) 反代目标.clear();\n\t反代目标.set(String(主机).toLowerCase() + ':' + 端口, Date.now());\n}\nfunction 目标需走反代(主机, 端口) {\n\tconst t = 反代目标.get(String(主机).toLowerCase() + ':' + 端口);\n\treturn !!t && Date.now() - t < 反代目标有效毫秒;\n}\n\nasync function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com', UUID = '00000000-0000-4000-8000-000000000000') {"
   }
 ]
