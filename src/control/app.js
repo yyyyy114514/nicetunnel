@@ -15,6 +15,7 @@ import { handleLogin, handleLogout, requireAuth, isAuthed, bearerToken, safeEqua
 import { trackRequest } from './logs.js';
 import { verifySubToken, readyAccountSet } from './users.js';
 import { landingHtml } from './sub/landing.js';
+import { homeClientSupport } from './homefeed.js';
 import { buildSubscription, pollAndPersist } from './pipeline.js';
 import { refreshRulesStep, getRulesStatus, fetchAndSaveIni } from './rulesfeed.js';
 import { detectFormatInfo } from './sub/index.js';
@@ -187,9 +188,14 @@ export async function handleMain({ request, env, ctx, url, identity }) {
     }
     // 生成器模式与上游一致：mixed 且非浏览器 UA → base64（486 行）
     // 家宽订阅（&target=home）：只出 Clash 格式（需要 mihomo 1.19.25+ 的 type: openvpn）
-    const home = !generatorMode && url.searchParams.get('target') === 'home';
-    if (home && !settings.preferred?.home?.enabled) return new Response('家宽订阅未开启', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
-    const fi = generatorMode ? { format: 'base64' } : home ? { format: 'clash' } : detectFormatInfo(url, ua);
+    const wantHome = !generatorMode && url.searchParams.get('target') === 'home';
+    if (wantHome && !settings.preferred?.home?.enabled) return new Response('家宽订阅未开启', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+    // 客户端不支持 OpenVPN 节点：退回它能用的普通订阅（按 UA 自适应格式），不给一份它加载不了的配置
+    const homeSupport = wantHome ? homeClientSupport(ua) : null;
+    const home = wantHome && homeSupport.ok;
+    let fmtUrl = url;
+    if (wantHome && !home) { fmtUrl = new URL(url.href); fmtUrl.searchParams.delete('target'); }
+    const fi = generatorMode ? { format: 'base64' } : home ? { format: 'clash' } : detectFormatInfo(fmtUrl, ua);
     const format = fi.format;
     try {
       const out = await buildSubscription({
@@ -202,7 +208,9 @@ export async function handleMain({ request, env, ctx, url, identity }) {
         msg: `${format} ${out.nodes.length} 节点${user ? ' · 用户 ' + user.id : ''}`,
         usage: { used: out.summary.used, total: out.summary.budget },
       }));
-      return new Response(out.body, { status: 200, headers: out.headers });
+      // 要了家宽但客户端不支持：给的是普通订阅，响应头写明原因（排障用）
+      const headers = wantHome && !home ? { ...out.headers, 'X-NT-Home': 'fallback; ' + encodeURIComponent(homeSupport.reason || '') } : out.headers;
+      return new Response(out.body, { status: 200, headers });
     } catch (e) {
       // 家宽列表还没拉到：返回 503，客户端会继续用上一份，不会被空配置覆盖
       if (e?.code === 'home_unavailable') return new Response('家宽节点还没准备好（每小时更新一次），请稍后再试', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '600' } });

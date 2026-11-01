@@ -200,6 +200,7 @@ npm run build -- --no-extras       # zip 里只放 _worker.js
 - 开启：后台「节点来源」→ 家宽，勾启用；订阅链接后面加 `&target=home`（专属链接同样可以）。概览页和用户落地页会多一个「Clash 家宽」导入按钮。
 - 列表由 Cron 每小时从 VPN Gate 拉一次（约 1MB，只留 TCP 节点、去掉 VPN Gate 自营的机房服务器、按得分取前 N 个）；可以在后台点「立即刷新列表」。列表还没拉到时订阅返回 503，客户端会继续用上一份。
 - 只有 **mihomo 1.19.25 以上** 能用（Clash Verge Rev / FlClash / Clash Meta for Android），所以只出 Clash 格式；只走 TCP。前置只用你的 TLS 节点。
+- **不支持的客户端**（sing-box、Shadowrocket、Stash、Surge、v2rayN、Clash Premium，或 UA 里写明内核低于 1.19.25 的 mihomo）拿家宽链接时，不会拿到一份加载不了的配置，而是**退回它能用的普通订阅**（照常有普通节点，只是没有家宽），响应头 `X-NT-Home: fallback; 原因` 写明原因。UA 不带内核版本的 mihomo 系客户端按支持处理；如果内核实际太旧导致加载失败，升级客户端即可。
 - 节点是志愿者共享的，掉线是常态（大约一半能通）；`🏠 家宽自动` 会自动换下一个，想挑国家在 `🏠 家宽节点` 里手选。速度取决于对方家里的上传。
 
 ## 自建 ProxyIP（访问套了 CF 的网站更快更稳）

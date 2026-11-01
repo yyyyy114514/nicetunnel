@@ -161,7 +161,7 @@ function clientMain() {
         ['preferred.best.refreshSeconds', '刷新间隔（秒）', 'num', null, 1],
         ['preferred.best.namePrefix', '名称前缀', 'text', null, 1],
       ] },
-      { t: "家宽（客户端链式，仅 Clash / mihomo）", act: [['homeRefresh', '立即刷新列表']], out: 'outHome', d: '订阅链接加 &target=home 得到"家宽"订阅：出口是 VPN Gate 志愿者的住宅宽带（适合一见机房 IP 就弹验证的网站）。OpenVPN 由客户端自己跑、经你的 CF 节点连过去，Worker 只做普通转发，免费版也不会被掐断。需要 mihomo 1.19.25 以上（Clash Verge Rev / FlClash / Clash Meta for Android），只走 TCP；节点是志愿者共享的，掉线是常态（约一半能通），家宽自动组会自动换。', f: [
+      { t: "家宽（客户端链式，仅 Clash / mihomo）", act: [['homeRefresh', '立即刷新列表']], out: 'outHome', d: '订阅链接加 &target=home 得到"家宽"订阅：出口是 VPN Gate 志愿者的住宅宽带（适合一见机房 IP 就弹验证的网站）。OpenVPN 由客户端自己跑、经你的 CF 节点连过去，Worker 只做普通转发，免费版也不会被掐断。需要 mihomo 1.19.25 以上（Clash Verge Rev / FlClash / Clash Meta for Android），只走 TCP；其它客户端拿家宽链接会自动退回普通订阅（不会加载失败）；节点是志愿者共享的，掉线是常态（约一半能通），家宽自动组会自动换。', f: [
         ['preferred.home.enabled', '启用家宽订阅', 'bool'],
         ['preferred.home.maxNodes', '住宅节点数量上限（按 VPN Gate 得分取前 N 个）', 'num'],
         ['preferred.home.excludeOfficial', '排除 VPN Gate 自营的机房服务器（只留住宅宽带）', 'bool', null, 1],

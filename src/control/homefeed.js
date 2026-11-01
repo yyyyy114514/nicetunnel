@@ -21,6 +21,34 @@ const decodeB64 = (s) => { try { return new TextDecoder().decode(Uint8Array.from
 /** OpenVPN 配置是纯 ASCII：atob 的结果直接用，不逐字节转换 */
 const asciiB64 = (s) => { try { return atob(s); } catch { return ''; } };
 
+/** mihomo 支持 type: openvpn 的最低版本 */
+export const HOME_MIN_MIHOMO = [1, 19, 25];
+
+/**
+ * 这个客户端能不能用家宽订阅。不认识 type: openvpn 的客户端拿到家宽配置会整份加载失败（连普通节点也用不了），
+ * 所以明确不支持的退回普通订阅。
+ * - UA 里写了 mihomo / clash.meta 内核版本：≥ 1.19.25 才支持；
+ * - 其它内核的客户端（sing-box、Shadowrocket、Stash、Surge、v2ray 系、Clash Premium 等）：不支持；
+ * - 基于 mihomo 但 UA 不带内核版本的（Clash Verge Rev、FlClash、Clash Meta for Android）和认不出的：按支持处理。
+ * @returns {{ok:boolean, reason?:string}}
+ */
+export function homeClientSupport(ua) {
+  const s = String(ua || '');
+  const v = /(?:mihomo|clash\.meta)[\s/]v?(\d+)\.(\d+)\.(\d+)/i.exec(s);
+  if (v) {
+    const got = v.slice(1, 4).map(Number);
+    for (let i = 0; i < 3; i++) {
+      if (got[i] > HOME_MIN_MIHOMO[i]) return { ok: true };
+      if (got[i] < HOME_MIN_MIHOMO[i]) return { ok: false, reason: `mihomo ${got.join('.')} 太旧（需要 ${HOME_MIN_MIHOMO.join('.')} 以上）` };
+    }
+    return { ok: true };
+  }
+  if (/clash-?verge|flclash|clashmeta|clash\.meta|mihomo|nyanpasu|clashx\.meta/i.test(s)) return { ok: true };
+  const other = /sing-?box|\bSF[AIMT]\/|shadowrocket|stash|surge|quantumult|loon|v2ray|nekobox|nekoray|hiddify|karing|streisand|clash-?for-?windows|clashforwindows|clashx(?!\.meta)|^clash\//i.exec(s);
+  if (other) return { ok: false, reason: `${other[0]} 不支持 OpenVPN 节点` };
+  return { ok: true };
+}
+
 /** VPN Gate 自营的机房服务器（不是住宅宽带） */
 export const isOfficial = (host, operator) => /^public-vpn-/i.test(host || '') || /Daiyuu Nobori/i.test(operator || '');
 

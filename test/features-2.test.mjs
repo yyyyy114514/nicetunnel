@@ -162,3 +162,36 @@ test('家宽订阅：开启后 &target=home 出 Clash（OpenVPN 节点 + 家宽�
     assert.equal((await get('&target=home')).status, 403);
   } finally { globalThis.fetch = realFetch; }
 });
+
+test('家宽订阅遇到不支持的客户端：退回它能用的普通订阅（不含 OpenVPN），响应头写明原因', async () => {
+  const worker = (await import('../src/index.js')).default;
+  const { resetStoreState } = await import('../src/control/store.js');
+  const { resetPipelineState } = await import('../src/control/pipeline.js');
+  const { deriveIdentity } = await import('../src/control/identity.js');
+  const { HOME_KEY, parseVpnGate, homeClientSupport } = await import('../src/control/homefeed.js');
+  const { memKV, fakeFetch, settingsWith } = await import('./helpers.mjs');
+  assert.equal(homeClientSupport('mihomo/1.19.25').ok, true);
+  assert.equal(homeClientSupport('mihomo/1.19.24').ok, false);
+  assert.equal(homeClientSupport('clash-verge/v2.2.3').ok, true, 'UA 不带内核版本的 mihomo 系按支持处理');
+  for (const ua of ['SFA/1.12.1 (sing-box 1.12.1)', 'Shadowrocket/2070', 'Stash/3.0.1 Clash/1.11.0', 'v2rayN/7.10', 'ClashforWindows/0.20.39']) assert.equal(homeClientSupport(ua).ok, false, ua);
+  const realFetch = globalThis.fetch;
+  try {
+    resetStoreState(); resetPipelineState();
+    globalThis.fetch = fakeFetch({});
+    const kv = memKV({ 'nt.settings': settingsWith({ preferred: { home: { enabled: true } } }), 'nt.accounts': [], [HOME_KEY]: { ...parseVpnGate(vgCsv()), fetchedAt: Date.now() } });
+    const env = { KV: kv, ADMIN: 'pw' };
+    const id = deriveIdentity(env, 'vp.example.com');
+    const get = (ua) => worker.fetch(new Request('https://vp.example.com/sub?token=' + id.subToken + '&target=home', { headers: { 'User-Agent': ua } }), env, { waitUntil() {} });
+    const sb = await get('SFA/1.12.1 (sing-box 1.12.1)');
+    assert.equal(sb.status, 200);
+    assert.match(sb.headers.get('X-NT-Home') || '', /^fallback/);
+    const body = await sb.text();
+    assert.ok(!body.includes('openvpn'));
+    assert.ok(Array.isArray(JSON.parse(body).outbounds), '给的是 sing-box 自己的格式');
+    const old = await get('mihomo/1.19.20');
+    assert.ok(!(await old.text()).includes('openvpn'), '旧版 mihomo 也退回');
+    const ok = await get('clash-verge/v2.2.3');
+    assert.equal(ok.headers.get('X-NT-Home'), null);
+    assert.ok((await ok.text()).includes('"type":"openvpn"'));
+  } finally { globalThis.fetch = realFetch; }
+});
