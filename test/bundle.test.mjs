@@ -37,9 +37,8 @@ test('dist/_worker.js：订阅 / 后台 / 伪装页 / 节点模式', { skip: has
   } finally { globalThis.fetch = real; }
 });
 
-test('dist/_worker.js：发布产物已隐藏特征码；edt 风格保留注释，obf 风格压缩标识符', { skip: has ? false : '未构建，跳过' }, () => {
+test('dist/_worker.js：发布产物已隐藏特征码（disguise 伪装风格）', { skip: has ? false : '未构建，跳过' }, () => {
   const code = fs.readFileSync(file, 'utf8');
-  const isEdt = code.includes('style=edt');
   // 特征码：与上游 cmliu/edgetunnel 一样，身份类关键词不出现在文件里
   assert.ok(!/edgetunnel/i.test(code), '无上游项目名明文');
   assert.ok(!/cmliu/i.test(code), '无作者标识明文');
@@ -47,15 +46,13 @@ test('dist/_worker.js：发布产物已隐藏特征码；edt 风格保留注释�
   assert.ok(!/nicetunnel/i.test(code), '无本项目名明文');
   assert.ok(!code.includes('vless://') && !code.includes('trojan://') && !code.includes('socks5://'), '协议明文字符串已表达式化');
   assert.ok(!code.includes('// ---- src/'), '无源码模块路径标记');
-  if (isEdt) {
-    const commentLines = code.split('\n').filter((l) => /^\s*\/\//.test(l)).length;
-    assert.ok(commentLines > 100, `注释被保留（${commentLines} 行）`);
-    assert.ok(Buffer.byteLength(code) > 4_000_000, '含尾部注释块，体积与上游发布文件相当');
-    assert.ok(code.includes('String.fromCharCode('), '特征码改为运行时表达式');
-  } else {
-    assert.ok(!code.includes('候选列表') && !code.includes('调试日志打印'), '中文内部标识已改名');
-    assert.ok(Buffer.byteLength(code) < 2_000_000, 'obf 风格体积较小');
+  // disguise 伪装风格：保留注释与可读结构，域词汇转义，形态与正常 i18n 项目一致
+  for (const kw of ['反代', '代理', '链式', '订阅', '伪装', '隧道', '拨号', '优选', '上行', '下行', 'tunnel']) {
+    assert.ok(!new RegExp(kw, 'i').test(code), `域词汇「${kw}」已隐藏`);
   }
+  const commentLines = code.split('\n').filter((l) => /^\s*\/\//.test(l)).length;
+  assert.ok(commentLines > 100, `注释被保留（${commentLines} 行）`);
+  assert.ok(Buffer.byteLength(code) > 4_000_000, '含尾部注释块，体积与上游发布文件相当');
 });
 
 // ---- zip：_worker.js + 本项目的发布文件 ----
@@ -90,20 +87,16 @@ test('nicetunnel.zip：只含本项目的 worker、文档、配置和静态门�
   assert.ok(files.has('_worker.js'));
   assert.ok(files.get('_worker.js').equals(fs.readFileSync(file)), 'zip 里的 _worker.js 与 dist/_worker.js 一致');
   if (files.size === 1) return; // --no-extras 构建
-  const packageFiles = ['CHANGELOG.md', 'DEPLOY.md', 'README.md', '_headers', 'favicon.svg', 'index.html', 'robots.txt'];
-  const rootFiles = ['LICENSE', 'NOTICE.md', 'wrangler.toml'];
-  const expected = [...packageFiles, ...rootFiles];
+  const packageFiles = ['CHANGELOG.md', 'DEPLOY.md', 'NOTICE.md', 'README.md', '_headers', 'favicon.svg', 'index.html', 'robots.txt', 'wrangler.toml'];
+  const expected = [...packageFiles, 'LICENSE'];
   assert.deepEqual([...files.keys()].filter((k) => k !== '_worker.js').sort(), expected.slice().sort());
   for (const name of packageFiles) {
     const source = fileURLToPath(new URL('../scripts/assets/package/' + name, import.meta.url));
     assert.ok(files.get(name).equals(fs.readFileSync(source)), name + ' 与发布素材逐字节一致');
   }
-  for (const name of rootFiles) {
-    const source = fileURLToPath(new URL('../' + name, import.meta.url));
-    assert.ok(files.get(name).equals(fs.readFileSync(source)), name + ' 与项目文件逐字节一致');
-  }
+  assert.ok(files.get('LICENSE').equals(fs.readFileSync(fileURLToPath(new URL('../LICENSE', import.meta.url)))), 'LICENSE 与项目文件逐字节一致');
   assert.ok(![...files.keys()].some((name) => name.startsWith('.github/')), '不夹带上游 workflows');
-  assert.match(files.get('index.html').toString('utf8'), /Service online/);
+  assert.match(files.get('index.html').toString('utf8'), /site-status/);
   assert.match(files.get('robots.txt').toString('utf8'), /Disallow: \//);
 });
 
@@ -139,11 +132,20 @@ test('纯节点包：与全量包的 node 角色响应一致，且无主站定�
   } finally { globalThis.fetch = real; }
 });
 
-test('nicetunnel-node.zip：只含纯节点 worker 与许可文件', { skip: nodeHas ? false : '未构建，跳过' }, () => {
+test('nicetunnel-node.zip：节点 worker + 与全量包相同的伪装素材', { skip: nodeHas ? false : '未构建，跳过' }, () => {
   const zipFile = fileURLToPath(new URL('../dist/nicetunnel-node.zip', import.meta.url));
   const files = readZip(fs.readFileSync(zipFile));
   assert.ok(files.has('_worker.js'));
   assert.ok(files.get('_worker.js').equals(fs.readFileSync(nodeFile)));
   if (files.size === 1) return; // --no-extras 构建
-  assert.deepEqual([...files.keys()].sort(), ['LICENSE', 'NOTICE.md', '_worker.js'].sort());
+  // 节点包与全量包同一套发布素材（状态页门面 + 文档 + LICENSE），对外形象一致
+  const packageFiles = ['CHANGELOG.md', 'DEPLOY.md', 'NOTICE.md', 'README.md', '_headers', 'favicon.svg', 'index.html', 'robots.txt', 'wrangler.toml', 'LICENSE'];
+  assert.deepEqual([...files.keys()].filter((k) => k !== '_worker.js').sort(), packageFiles.slice().sort());
+  // 伪装素材里的文档不应出现代理域关键词
+  for (const name of ['README.md', 'DEPLOY.md', 'CHANGELOG.md', 'NOTICE.md', 'index.html']) {
+    const text = files.get(name).toString('utf8');
+    for (const kw of ['vless', 'trojan', 'clash', 'socks', 'proxy', 'tunnel', '反代', '代理', '订阅', '伪装']) {
+      assert.ok(!new RegExp(kw, 'i').test(text), `${name} 不含「${kw}」`);
+    }
+  }
 });

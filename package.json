@@ -12,6 +12,7 @@
     "demo": "node scripts/build-demo.mjs"
   },
   "devDependencies": {
+    "acorn-walk": "^8.3.4",
     "javascript-obfuscator": "^4.1.1",
     "terser": "^5.44.1"
   }

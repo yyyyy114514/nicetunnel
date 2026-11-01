@@ -11,6 +11,25 @@ import JavaScriptObfuscator from 'javascript-obfuscator';
 import { pathToFileURL } from 'node:url';
 
 /**
+ * 仅改标识符名（disguise 风格用）：不压缩、不删代码、保留注释，
+ * 把所有局部/顶层绑定改成短名，消除 `SOCKS5白名单`、`所有反代数组` 这类
+ * 自带关键词的标识符。属性名与环境变量名不动（外部接口）。
+ * 注意：必须在特征码转义【之前】执行——terser 会按字符串值重新输出字面量，
+ * 先转义会被它还原成明文。
+ * @param {string} source 已打包好的单文件 ESM
+ */
+export async function mangleIdentifiers(source) {
+  const result = await minify(source, {
+    module: true,
+    compress: false,
+    mangle: { toplevel: true, properties: false },
+    format: { comments: true, beautify: true, indent_level: 2, ascii_only: false },
+  });
+  if (!result.code) throw new Error('Terser 未生成代码');
+  return result.code;
+}
+
+/**
  * @param {string} source 已打包好的单文件 ESM
  * @param {{seed?: number, strings?: boolean}} options
  * @returns {Promise<{code: string, stats: {minifiedBytes: number, obfuscatedBytes: number}}>}

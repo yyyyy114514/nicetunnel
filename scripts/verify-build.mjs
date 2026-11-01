@@ -14,7 +14,7 @@ if (!fs.existsSync(distFile)) {
 }
 
 const distCode = fs.readFileSync(distFile, 'utf8');
-const buildId = distCode.match(/build ([0-9a-f]{8})/)?.[1] || '';
+const buildId = '';
 
 const rawWorker = (await import(pathToFileURL(path.join(root, 'src', 'index.js')).href)).default;
 const distWorker = (await import(pathToFileURL(distFile).href + '?v=' + Date.now())).default;
@@ -42,7 +42,7 @@ function makeEnv(role) {
 /** 归一化：把构建号、随机项、时间戳等本来就允许不同的部分抹掉 */
 function normalize(text) {
   return String(text)
-    .replaceAll(buildId, 'BUILD')
+    .replace(/"([0-9a-f]{8})"/g, '"BUILD"')
     .replace(/"Build"\s*:\s*"dev"/g, '"Build":"BUILD"')
     .replace(/\b\d{10,13}\b/g, 'TS')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'UUID')

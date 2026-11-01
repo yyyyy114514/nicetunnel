@@ -1,0 +1,20 @@
+name = "site-status"
+main = "_worker.js"
+compatibility_date = "2025-09-01"
+
+# 检测历史存放的 KV 命名空间（主实例需要；上报实例无需绑定）
+[[kv_namespaces]]
+binding = "KV"
+id = "在此填入你的 KV namespace id"
+
+# 每 5 分钟执行一轮检测
+[triggers]
+crons = ["*/5 * * * *"]
+
+# 环境变量（敏感值请用 `wrangler secret put`）：
+# ADMIN  面板密码（主实例必填）
+# UUID   站点标识（多实例部署时保持一致）
+# KEY    面板快捷访问路径（可选）
+# HOST   对外主机名（可选）
+[vars]
+MODE = "auto"

@@ -289,12 +289,18 @@ test('列表自适应 TTL：内容不变时拉取间隔指数放大，减少了�
   const st = await loadRegionStructure({ settings: s, fetchFn: f, now: 0, cache: newRegionCache() });
   const spec = buildRegionSpecs({ settings: s, uuid: UUID, structure: st }).specs[0];
   const c0 = f.calls.length;
+  // 每步之间把后台的 stale-while-revalidate 刷新冲落（真实网络里它早已完成；假 fetch 是零延迟的，需要显式让出）
+  const settle = () => new Promise((r) => setImmediate(r));
   await route(spec, { fetchFn: f, now: 1e6 });              // 第 1 次拉取（基线 TTL 180s±20%）
+  await settle();
   assert.equal(f.calls.length, c0 + 1);
-  await route(spec, { fetchFn: f, now: 1e6 + 250e3 });      // 超过基线最坏值 216s → 第 2 次拉取，内容没变
+  await route(spec, { fetchFn: f, now: 1e6 + 250e3 });      // 超过基线最坏值 216s → 第 2 次拉取（SWR 后台刷新），内容没变
+  await settle();
   assert.equal(f.calls.length, c0 + 2);
-  await route(spec, { fetchFn: f, now: 1e6 + 500e3 });      // 距上次 250s < 放大后的最短 288s → 不拉
+  await route(spec, { fetchFn: f, now: 1e6 + 500e3 });      // 距上次 250s < 放大后的最短 2×144s=288s → 不拉
+  await settle();
   assert.equal(f.calls.length, c0 + 2, '内容不变后 TTL 翻倍，不再按基线频率外拉');
-  await route(spec, { fetchFn: f, now: 1e6 + 800e3 });      // 距上次 550s > 432s → 第 3 次拉取
+  await route(spec, { fetchFn: f, now: 1e6 + 800e3 });      // 距上次 550s > 2×216s=432s → 第 3 次拉取
+  await settle();
   assert.equal(f.calls.length, c0 + 3);
 });

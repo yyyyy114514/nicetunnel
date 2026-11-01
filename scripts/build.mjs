@@ -1,13 +1,15 @@
 // 构建全量包 src/index.js → dist/_worker.js / nicetunnel.zip，
 // 以及纯节点包 src/node.js → dist/_worker.node.js / nicetunnel-node.zip。
 //
-// 两种发布风格（--style=edt 默认 / --style=obf）：
-//   edt  保留全部注释与可读结构，只把「特征码」按上游 cmliu/edgetunnel 的做法换成运行时表达式
-//        （String.fromCharCode 计算），并附上游同款的尾部注释块；产物形态与上游发布文件一致。
-//   obf  Terser AST 压缩 + javascript-obfuscator（标识符改名、Base64 字符串表），体积最小。
-// 用法：npm run build [-- --style=edt|obf] [-- --no-trailer] [-- --no-obfuscate] [-- --no-extras]
+// 三种发布风格（--style=disguise 默认 / edt / obf）：
+//   disguise  伪装风格：标识符改名（消除 `SOCKS5白名单`、`所有反代数组` 这类词）+ 全域关键词
+//             转义（身份/协议/隧道域词，含中文）+ 注释中性化 + 尾部注释块。
+//             发布文件与 zip 文档里不出现任何代理/隧道相关词汇，外观是普通的状态页项目。
+//   edt       上游形态：保留可读结构与中文标识符，只隐藏身份/协议词；产物形态贴近上游发布文件。
+//   obf       Terser AST 压缩 + javascript-obfuscator（标识符改名、Base64 字符串表），体积最小。
+// 用法：npm run build [-- --style=disguise|edt|obf] [-- --no-trailer] [-- --no-obfuscate] [-- --no-extras]
 //   --no-obfuscate  只打包，不做任何隐藏（排查构建问题时使用）
-//   --no-trailer    产物不追加尾部注释块（仅 edt 风格）
+//   --no-trailer    产物不追加尾部注释块
 //   --no-extras     zip 里只放 _worker.js
 //
 // 产物文件头不加任何注释（第一行就是代码）；版权/许可信息只在尾部注释块与 zip 的 LICENSE、NOTICE.md 里。
@@ -19,16 +21,16 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { obfuscateWorker } from './obfuscate.mjs';
-import { hideSignatures } from './sig-hide.mjs';
+import { obfuscateWorker, mangleIdentifiers } from './obfuscate.mjs';
+import { hideSignatures, EDT_KEYWORDS, DISGUISE_KEYWORDS, COMMENT_REPLACEMENTS, COMMENT_REPLACEMENTS_DISGUISE } from './sig-hide.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distDir = path.join(root, 'dist');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const ID = '[\\p{L}\\p{N}_$]+';
 const argv = process.argv.slice(2);
-const STYLE = (argv.find((a) => a.startsWith('--style=')) || '--style=edt').split('=')[1];
-if (!['edt', 'obf'].includes(STYLE)) throw new Error(`未知的 --style=${STYLE}（可选 edt / obf）`);
+const STYLE = (argv.find((a) => a.startsWith('--style=')) || '--style=disguise').split('=')[1];
+if (!['disguise', 'edt', 'obf'].includes(STYLE)) throw new Error(`未知的 --style=${STYLE}（可选 disguise / edt / obf）`);
 
 // ---------------- 解析与依赖图 ----------------
 const modules = new Map(); // abs -> {id, abs, code, deps:[abs]}
@@ -142,21 +144,20 @@ async function buildCode({ entryName, workerName, label, requireScheduled }) {
   let sigStats = null;
   let trailerBytes = 0;
 
-  if (STYLE === 'edt') {
-    // 上游形态：保留注释与可读结构，只把特征码换成运行时表达式。
+  if (STYLE === 'disguise') {
+    // 伪装风格：先改名（terser 会按值重排字面量，转义必须放在后面），再全域关键词转义。
     if (withObfuscation) {
-      const hidden = hideSignatures(code);
+      code = await mangleIdentifiers(code);
+      const hidden = hideSignatures(code, { keywords: DISGUISE_KEYWORDS, commentReplacements: COMMENT_REPLACEMENTS_DISGUISE });
       if (hidden.error) console.error('特征码隐藏跳过：' + hidden.error);
       else { code = hidden.code; sigStats = { hits: hidden.hits, commentHits: hidden.commentHits ?? 0 }; }
     }
-    // 尾部大段注释：与上游发布文件形态一致（纯注释，不影响运行）
-    const trailerFile = path.join(root, 'scripts', 'assets', 'edt-trailer.txt');
-    if (!argv.includes('--no-trailer')) {
-      if (!fs.existsSync(trailerFile)) throw new Error('缺少 scripts/assets/edt-trailer.txt（或加 --no-trailer 跳过）');
-      const trailer = fs.readFileSync(trailerFile, 'utf8');
-      if (!trailer.startsWith('/*') || !trailer.trimEnd().endsWith('*/') || trailer.slice(2, -3).includes('*/')) throw new Error('edt-trailer.txt 不是一个完整的单个 /* … */ 注释');
-      code += '\n' + trailer;
-      trailerBytes = Buffer.byteLength(trailer);
+  } else if (STYLE === 'edt') {
+    // 上游形态：保留注释与可读结构，只隐藏身份/协议特征码。
+    if (withObfuscation) {
+      const hidden = hideSignatures(code, { keywords: EDT_KEYWORDS, commentReplacements: COMMENT_REPLACEMENTS });
+      if (hidden.error) console.error('特征码隐藏跳过：' + hidden.error);
+      else { code = hidden.code; sigStats = { hits: hidden.hits, commentHits: hidden.commentHits ?? 0 }; }
     }
   } else {
     if (withObfuscation) {
@@ -164,7 +165,15 @@ async function buildCode({ entryName, workerName, label, requireScheduled }) {
       obfuscateStats = obfuscated.stats;
       code = obfuscated.code;
     }
-    // 文件头不加任何注释；完整声明随 zip 的 LICENSE、NOTICE.md 发布。
+  }
+  // 尾部大段注释：纯注释不影响运行；默认附带（--no-trailer 跳过，免费版 Workers 压缩上限 1MB 时需要）
+  const trailerFile = path.join(root, 'scripts', 'assets', 'edt-trailer.txt');
+  if (STYLE !== 'obf' && !argv.includes('--no-trailer')) {
+    if (!fs.existsSync(trailerFile)) throw new Error('缺少 scripts/assets/edt-trailer.txt（或加 --no-trailer 跳过）');
+    const trailer = fs.readFileSync(trailerFile, 'utf8');
+    if (!trailer.startsWith('/*') || !trailer.trimEnd().endsWith('*/') || trailer.slice(2, -3).includes('*/')) throw new Error('edt-trailer.txt 不是一个完整的单个 /* … */ 注释');
+    code += '\n' + trailer;
+    trailerBytes = Buffer.byteLength(trailer);
   }
 
   fs.mkdirSync(distDir, { recursive: true });
@@ -223,18 +232,16 @@ async function emitTarget({ entryName, workerName, zipName, label, requireSchedu
   const { code, out, buildId, rawBytes, withObfuscation, obfuscateStats, sigStats, trailerBytes, moduleCount } = built;
   // zip 只使用本项目文件，不夹带上游仓库的 workflows 或大体积占位注释。
   const zipFiles = [{ name: '_worker.js', data: Buffer.from(code, 'utf8') }];
-  const withExtras = !process.argv.includes('--no-extras');
+  const withExtras = !argv.includes('--no-extras');
   if (withExtras) {
-    const extras = [];
-    if (fullPackage) {
-      const extrasDir = path.join(root, 'scripts', 'assets', 'package');
-      if (!fs.existsSync(extrasDir)) throw new Error('缺少 scripts/assets/package（或加 --no-extras 跳过）');
-      const walk = (dir, prefix = '') => fs.readdirSync(dir, { withFileTypes: true })
-        .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name), prefix + e.name + '/') : [{ name: prefix + e.name, data: fs.readFileSync(path.join(dir, e.name)) }]));
-      extras.push(...walk(extrasDir));
-    }
-    const legalAndConfig = fullPackage ? ['LICENSE', 'NOTICE.md', 'wrangler.toml'] : ['LICENSE', 'NOTICE.md'];
-    for (const name of legalAndConfig) extras.push({ name, data: fs.readFileSync(path.join(root, name)) });
+    // zip = _worker.js + 发布素材（状态页门面与文档，来自 scripts/assets/package/）+ LICENSE。
+    // NOTICE.md / wrangler.toml 也在 package/ 里，内容与伪装形象一致；不再从项目根目录取。
+    const extrasDir = path.join(root, 'scripts', 'assets', 'package');
+    if (!fs.existsSync(extrasDir)) throw new Error('缺少 scripts/assets/package（或加 --no-extras 跳过）');
+    const walk = (dir, prefix = '') => fs.readdirSync(dir, { withFileTypes: true })
+      .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name), prefix + e.name + '/') : [{ name: prefix + e.name, data: fs.readFileSync(path.join(dir, e.name)) }]));
+    const extras = walk(extrasDir);
+    extras.push({ name: 'LICENSE', data: fs.readFileSync(path.join(root, 'LICENSE')) });
     extras.sort((a, b) => (a.name < b.name ? -1 : 1));
     zipFiles.push(...extras);
   }
@@ -246,8 +253,10 @@ async function emitTarget({ entryName, workerName, zipName, label, requireSchedu
   console.log(`已生成 dist/${workerName}：${(Buffer.byteLength(code) / 1024).toFixed(1)} KB（gzip 约 ${(gz / 1024).toFixed(0)} KB），${moduleCount} 个模块`);
   if (!withObfuscation) {
     console.log(`[${label}] 隐藏：已跳过（--no-obfuscate）`);
+  } else if (STYLE === 'disguise') {
+    console.log(`[${label}] 伪装：标识符改名 + 关键词转义 ${sigStats?.hits ?? 0} 处 + 注释中性化 ${sigStats?.commentHits ?? 0} 处${trailerBytes ? '，含尾部注释 ' + (trailerBytes / 1024).toFixed(0) + ' KB' : ''}`);
   } else if (STYLE === 'edt') {
-    console.log(`[${label}] 隐藏：特征码表达式化 ${sigStats?.hits ?? 0} 处 + 注释中性化 ${sigStats?.commentHits ?? 0} 处（注释与结构保留）${trailerBytes ? '，含尾部注释 ' + (trailerBytes / 1024).toFixed(0) + ' KB' : ''}`);
+    console.log(`[${label}] 隐藏：特征码转义 ${sigStats?.hits ?? 0} 处 + 注释中性化 ${sigStats?.commentHits ?? 0} 处（注释与结构保留）${trailerBytes ? '，含尾部注释 ' + (trailerBytes / 1024).toFixed(0) + ' KB' : ''}`);
   } else {
     console.log(`[${label}] 混淆：AST 压缩 + 标识符改名 + Base64 字符串表（原始 ${(rawBytes / 1024).toFixed(1)} KB → 压缩 ${(obfuscateStats.minifiedBytes / 1024).toFixed(1)} KB → 混淆 ${(obfuscateStats.obfuscatedBytes / 1024).toFixed(1)} KB）`);
   }

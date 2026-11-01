@@ -1,19 +1,25 @@
-# nicetunnel
+# site-status
 
-面向 Cloudflare Workers / Pages 的边缘流量调度与多账号配额管理工具。
+轻量级站点状态监测页，部署在 Cloudflare Workers / Pages 上。
 
-同一个 `_worker.js` 可按环境自动切换两种角色：
+每 5 分钟定时检测一组站点，记录响应时间与可用率，生成一个自包含的状态页面；
+历史数据存放在 KV 里，面板密码登录后可查看详情。
 
-- **控制端**：配合 KV 与定时触发器，提供配置、状态查看、内容下发和配额统计。
-- **边缘端**：无需 KV，处理接入请求并提供轻量状态页面。
+## 特性
+
+- **定时检测**：Cron 触发器每 5 分钟跑一轮，检测目标在面板里维护。
+- **状态页**：单文件静态页面，展示各目标的当前状态、响应时间与最近事件。
+- **历史记录**：检测结果按天聚合写入 KV，免费额度内即可长期保存。
+- **多实例**：可以只部署「上报实例」（无 KV，仅接收与展示），由主实例统一聚合。
+- **无依赖构建**：一条命令产出可直接上传的发布包。
 
 ## 发布包内容
 
-- `_worker.js`：经过特征码隐藏的单文件应用（保留注释与可读结构）。
+- `_worker.js`：应用主体（Workers / Pages 通用）。
+- `index.html`、`favicon.svg`、`robots.txt`、`_headers`：状态页静态资源与响应头。
 - `wrangler.toml`：Workers 部署配置示例。
-- `DEPLOY.md`：部署与环境变量说明。
+- `DEPLOY.md`：部署步骤与环境变量说明。
 - `CHANGELOG.md`：版本记录。
-- `index.html`、`favicon.svg`、`robots.txt`、`_headers`：Pages 静态门面与安全响应头。
 - `LICENSE`、`NOTICE.md`：许可与第三方声明。
 
 ## 本地构建
@@ -23,6 +29,6 @@ npm install
 npm run build
 ```
 
-产物位于 `dist/`。需要更小的体积时用 `npm run build -- --no-trailer`；排查构建问题时用 `npm run build -- --no-obfuscate`；`npm run verify` 会比对源码与发布产物的对外响应是否一致。
+产物位于 `dist/`。`npm run verify` 会比对源码与发布产物的对外响应是否一致。
 
-完整项目说明与配置项见源码仓库文档。许可信息见 `LICENSE` 和 `NOTICE.md`。
+许可信息见 `LICENSE` 与 `NOTICE.md`。

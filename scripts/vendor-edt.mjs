@@ -13,11 +13,11 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const P = ['/opt/node-tools/node_modules', '/opt/npm-tools/node_modules'];
+const here = path.dirname(fileURLToPath(import.meta.url));
+const P = [path.join(here, '..', 'node_modules'), '/opt/node-tools/node_modules', '/opt/npm-tools/node_modules'];
 const acorn = require(require.resolve('acorn', { paths: P }));
 const walk = require(require.resolve('acorn-walk', { paths: P }));
 
-const here = path.dirname(fileURLToPath(import.meta.url));
 const upstreamFile = process.argv[2];
 const upstreamDir = process.argv[3] || path.dirname(upstreamFile);
 if (!upstreamFile) { console.error('用法: node scripts/vendor-edt.mjs <上游 _worker.js> [上游仓库目录]'); process.exit(1); }
@@ -148,7 +148,7 @@ patched = replaceRange(patched,
 // [NT-HOOK] SSTP 链路修正：应答 SSTP/PPP 保活、空闲超时放宽、RST 立即失败、TCP 序号校验。
 // 补丁原文存在 assets/vendor/sstp-patches.json（JSON 保留制表符），每处锚点必须恰好命中 1 次。
 const sstpPatches = JSON.parse(fs.readFileSync(path.join(here, 'assets', 'vendor', 'sstp-patches.json'), 'utf8'));
-for (const p of sstpPatches) patched = applyPatch(patched, p.search, p.replace);
+for (const p of sstpPatches) patched = applyPatch(patched, p.search, p.replace, p.expect ?? 1);
 const bodyOut = patched;
 
 let head = 'unknown';
@@ -180,12 +180,16 @@ let 链路竞速数 = 2;
 let 认证失败钩子 = null;
 /** [NT-HOOK] 失败日志钩子：log() 里带「失败 / 超时」的行交给它（节点自报统计用）；未注入时为 null，行为与上游一致。 */
 let 失败日志钩子 = null;
+/** [NT-HOOK] 出站连接守卫：(options)=>void，TCP 建立前调用，抛错即拒绝该连接。由 adapter 注入（滥用防护：拦截易触发举报的出站端口）。 */
+let 出站连接守卫 = null;
+/** [NT-HOOK] 守卫包装：未注入守卫时原样返回连接器；注入后每次连接先过守卫（两条连接路径——fetcher 与备用——都走这里）。 */
+const 出站连接守卫包裹 = (connect) => (!出站连接守卫 ? connect : (options, init) => { 出站连接守卫(options); return init === undefined ? connect(options) : connect(options, init); });
 /** [NT-HOOK] 备用 TCP 连接器（cloudflare:sockets 的 connect）：request.fetcher 不可用时使用；备用TCP连接优先=true 时总是使用。 */
 let 备用TCP连接 = null, 备用TCP连接优先 = false;
 
 /**
  * 注入上游原本在 fetch() 里按环境变量赋值的模块级开关。
- * @param {{debug?:boolean, socks5Whitelist?:string[], tcpConcurrentDial?:number, proxyConcurrentDial?:number, preloadRaceDial?:boolean, chainResultHook?:(ok:boolean, hostname:string, port:number)=>void, chainConnectTimeoutMs?:number, chainFailover?:number, chainRace?:number, authFailHook?:(request:Request, message?:string)=>void, failLogHook?:(line:string)=>void, socketConnect?:(options:any, init?:any)=>any, preferSocketConnect?:boolean}} o
+ * @param {{debug?:boolean, socks5Whitelist?:string[], tcpConcurrentDial?:number, proxyConcurrentDial?:number, preloadRaceDial?:boolean, chainResultHook?:(ok:boolean, hostname:string, port:number)=>void, chainConnectTimeoutMs?:number, chainFailover?:number, chainRace?:number, authFailHook?:(request:Request, message?:string)=>void, failLogHook?:(line:string)=>void, socketConnect?:(options:any, init?:any)=>any, preferSocketConnect?:boolean, connectGuardHook?:(options:any)=>void}} o
  */
 export function configure(o = {}) {
   if (o.debug !== undefined) 调试日志打印 = !!o.debug;
@@ -201,6 +205,7 @@ export function configure(o = {}) {
   if (typeof o.failLogHook === 'function') 失败日志钩子 = o.failLogHook; // [NT-HOOK]
   if (typeof o.socketConnect === 'function') 备用TCP连接 = o.socketConnect; // [NT-HOOK]
   if (o.preferSocketConnect !== undefined) 备用TCP连接优先 = !!o.preferSocketConnect; // [NT-HOOK]
+  if (o.connectGuardHook !== undefined) 出站连接守卫 = typeof o.connectGuardHook === 'function' ? o.connectGuardHook : null; // [NT-HOOK]
 }
 
 export {
