@@ -194,14 +194,22 @@ export async function setupAccount({ account, cfId, fetchFn, now, prev = {}, red
   if (redeploy && meta.bound && meta.project && !meta.redeployed) {
     if (!meta.deployId) return { ...meta, err: '绑定已添加，但项目还没有部署：请在 Cloudflare 控制台重新部署一次' };
     const rd = await cfApi(fetchFn, account, 'POST', `/accounts/${cfId}/pages/projects/${encodeURIComponent(meta.project)}/deployments/${meta.deployId}/retry`);
-    if (!rd.ok) return { ...meta, err: '绑定已添加，但重新部署失败：' + rd.error + '。请在 Cloudflare 控制台手动重新部署一次' };
+    if (!rd.ok) {
+      // 项目被 Cloudflare 封禁（abuse）：根本部署不了，标记出来，不再把用户分到这个账号
+      if (/has been blocked|abusereply/i.test(rd.error || '')) return { ...meta, blocked: true, err: '这个 Pages 项目已被 Cloudflare 封禁（abuse），无法部署，节点不可用。不会再把用户分到这个账号；请换一个账号或项目' };
+      return { ...meta, err: '绑定已添加，但重新部署失败：' + String(rd.error || '').replace(/[。.]\s*$/, '') + '。请在 Cloudflare 控制台手动重新部署一次' };
+    }
     meta.redeployed = true;
+    meta.blocked = false;
   }
   return meta;
 }
 
-/** 账号是否能接用户（KV 有了 + 已绑定，或管理员确认已手动绑定） */
-export const accountReady = (meta) => !!(meta?.nsId && (meta.bound || meta.manualBound));
+/**
+ * 账号是否能接用户：KV 有了，并且（自动绑定后重新部署成功，或管理员确认已手动绑定并部署）；项目被封禁的不算。
+ * 绑定要重新部署后才生效：只加了绑定、部署失败时节点还读不到 NT_MU，用户连上去会被拒
+ */
+export const accountReady = (meta) => !!(meta?.nsId && ((meta.bound && meta.redeployed) || meta.manualBound) && !meta.blocked);
 
 // ---------------------------------------------------------------------------
 // 在线汇总与并行限制

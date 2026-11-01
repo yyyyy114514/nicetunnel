@@ -515,10 +515,13 @@ function clientMain() {
     if (!d) return '<div class="card"><p class="mut">加载中…</p></div>';
     const acc = d.accounts.map((a) => {
       const m = a.meta || {};
-      const st = a.ready ? (a.pushed ? '<span class="pill p-ok">就绪</span>' : '<span class="pill p-low">已绑定，待下发</span>')
+      const st = m.blocked ? '<span class="pill p-exhausted">项目已被封禁</span>'
+        : a.ready ? (a.pushed ? '<span class="pill p-ok">就绪</span>' : '<span class="pill p-low">已绑定，待下发</span>')
+        : m.nsId && m.bound ? '<span class="pill p-low">已绑定，待重新部署</span>'
         : m.nsId ? '<span class="pill p-low">缺绑定</span>' : '<span class="pill p-stale">未配置</span>';
       const err = (m.err || a.error) ? '<div class="mut" style="white-space:normal;color:var(--bad)">' + h(m.err || a.error) + '</div>' : '';
-      const manual = m.nsId && !m.bound ? '<label class="chk" style="margin-left:6px"><input type="checkbox" data-mbound="' + h(a.id) + '" ' + (m.manualBound ? 'checked' : '') + '> 已手动绑定</label>' : '';
+      // 没自动绑定上、或绑定上了但重新部署没成功：都可以手动完成后勾选
+      const manual = m.nsId && !m.blocked && !(m.bound && m.redeployed) ? '<label class="chk" style="margin-left:6px"><input type="checkbox" data-mbound="' + h(a.id) + '" ' + (m.manualBound ? 'checked' : '') + '> ' + (m.bound ? '已手动重新部署' : '已手动绑定并部署') + '</label>' : '';
       return '<tr><td>' + h(a.name) + (a.enabled ? '' : ' <span class="tag">未启用</span>') + '</td><td class="mono">' + h(a.cfId ? a.cfId.slice(0, 8) + '…' : '未知') + '</td><td style="white-space:normal;min-width:220px">' + st + (m.project ? ' <span class="mut">Pages：' + h(m.project) + '</span>' : '') + manual + err + '</td>'
         + '<td><button class="btn sm" data-setup="' + h(a.id) + '">' + (a.ready ? '重新配置' : '自动配置') + '</button> <button class="btn sm" data-msetup-reset="' + h(a.id) + '">重置</button></td></tr>';
     }).join('');

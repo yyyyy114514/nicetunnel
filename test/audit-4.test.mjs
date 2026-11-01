@@ -143,3 +143,31 @@ test('Pages 项目列表：不带 per_page（CF 会报 400），按页翻到第 
   assert.equal(meta.project, 'p');
   assert.ok(!urls.some((u) => u.includes('/pages/projects?per_page')));
 });
+
+test('自动配置：项目被 Cloudflare 封禁时标记不可用；重新部署失败不算就绪，手动确认后才算', async () => {
+  const { accountReady } = await import('../src/control/users.js');
+  const mk = (retry) => async (url, init = {}) => {
+    const u = String(url);
+    const ok = (result) => new Response(JSON.stringify({ success: true, result }));
+    if (u.includes('/storage/kv/namespaces?')) return ok([{ id: 'ns1', title: 'nicetunnel-mu' }]);
+    if (u.includes('/pages/projects?page=1')) return ok([{ name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], canonical_deployment: { id: 'd1' } }]);
+    if (u.endsWith('/retry')) return retry();
+    return ok({});
+  };
+  const account = { id: 'a', hosts: ['n1.com'], auth: { apiToken: 't'.repeat(40) } };
+  // 实测 Cloudflare 的原话
+  const blocked = await setupAccount({ account, cfId: HEX(1), now: 1, fetchFn: mk(() => new Response(JSON.stringify({ success: false, errors: [{ message: 'Your Pages project has been blocked. Contact abusereply@cloudflare.com.' }] }), { status: 400 })) });
+  assert.equal(blocked.blocked, true);
+  assert.match(blocked.err, /封禁/);
+  assert.equal(accountReady(blocked), false);
+  assert.equal(accountReady({ ...blocked, manualBound: true }), false, '封禁的手动确认也不算');
+  // 普通的部署失败：绑定加上了，但不算就绪；手动部署后勾选才算
+  const failed = await setupAccount({ account, cfId: HEX(1), now: 1, fetchFn: mk(() => new Response('{"success":false,"errors":[{"message":"boom"}]}', { status: 500 })) });
+  assert.equal(failed.bound, true);
+  assert.ok(!failed.blocked);
+  assert.equal(accountReady(failed), false);
+  assert.equal(accountReady({ ...failed, manualBound: true }), true);
+  // 一切正常
+  const good = await setupAccount({ account, cfId: HEX(1), now: 1, fetchFn: mk(() => new Response('{"success":true,"result":{}}')) });
+  assert.equal(accountReady(good), true);
+});
