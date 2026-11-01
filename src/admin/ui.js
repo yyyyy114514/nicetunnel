@@ -39,7 +39,8 @@ main{padding:28px clamp(14px,3vw,40px) 80px;max-width:1180px;width:100%;min-widt
 .savebar[hidden]{display:none}.savebar .sp{flex:1}#dirtyN{font-weight:600}
 .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
 .f{display:flex;flex-direction:column;gap:5px}.f label{font-size:12.5px;color:var(--mut);font-weight:500}.f .h{font-size:12px;color:var(--mut)}.f.wide{grid-column:1/-1}
-input,select,textarea{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:11px;background:var(--bg2);color:var(--fg);font:inherit;transition:.15s;outline:none}
+input,select,textarea{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:11px;background:var(--bg2);color:var(--fg);font:inherit;transition:border-color .15s,box-shadow .15s;outline:none}
+input[type=checkbox],input[type=radio]{width:auto;padding:0;accent-color:var(--pri)}
 input:focus,select:focus,textarea:focus{border-color:var(--pri);box-shadow:0 0 0 3px #5b5bf02e}
 textarea{min-height:112px;resize:vertical}
 .chk{display:flex;align-items:center;gap:10px;padding:9px 0;cursor:pointer;color:var(--fg)!important;font-size:13.5px!important}
@@ -50,6 +51,7 @@ textarea{min-height:112px;resize:vertical}
 .btn:hover{border-color:var(--pri);color:var(--pri)}.btn.p{background:linear-gradient(135deg,var(--pri),var(--pri2));border:0;color:#fff;box-shadow:0 8px 20px #5b5bf044}.btn.p:hover{filter:brightness(1.07);color:#fff}
 .btn.d{color:var(--bad)}.btn.d:hover{border-color:var(--bad);color:var(--bad)}.btn:disabled{opacity:.5;cursor:default}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.cv{display:contents}
 input.cb{width:16px;height:16px;padding:0;margin:0;flex:none;accent-color:var(--pri);cursor:pointer}
 .tw{overflow-x:auto;margin:0 -4px;padding:0 4px}table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{text-align:left;padding:10px 10px;border-bottom:1px solid var(--line);white-space:nowrap}th{color:var(--mut);font-weight:550;font-size:12px;letter-spacing:.4px}tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--soft)}
@@ -68,13 +70,30 @@ pre{background:var(--bg2);border:1px solid var(--line);padding:12px;border-radiu
 .kv{display:grid;grid-template-columns:130px 1fr;gap:8px 16px;margin:0}.kv dt{color:var(--mut)}.kv dd{margin:0;font-weight:550;word-break:break-all}
 .note{padding:12px 14px;border-radius:12px;background:var(--soft);font-size:13px;margin-bottom:14px}
 @media (max-width:860px){
-.shell{grid-template-columns:1fr}
+.shell{grid-template-columns:1fr;grid-template-rows:auto 1fr;align-content:start}
 aside{position:sticky;top:0;z-index:20;height:auto;flex-direction:row;align-items:center;padding:8px 10px;border-right:0;border-bottom:1px solid var(--line);background:var(--card-s);gap:6px;overflow:hidden}
-.brand{padding:0 6px 0 2px}.brand small,.side-foot,.brand .t{display:none}
+.brand{padding:0 6px 0 2px}.brand small,.brand .t{display:none}
+.side-foot{margin:0;padding:0 2px 0 6px;flex:none}.side-foot span{display:none}
 nav{flex-direction:row;overflow-x:auto;gap:4px;scrollbar-width:none}nav::-webkit-scrollbar{display:none}
 nav button{padding:8px 12px;white-space:nowrap}
 main{padding:16px 12px 80px}.card{padding:16px;border-radius:14px}.hero{grid-template-columns:1fr;justify-items:center}.top h1{font-size:19px}
-.kv{grid-template-columns:100px 1fr}}
+.hero .kpis{width:100%;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kpi{padding:12px 14px}.kpi b{font-size:19px}
+.kv{grid-template-columns:100px 1fr}
+input,select,textarea{font-size:16px}input.cb{font-size:14px}
+.card h2{font-size:15px}}
+@media (max-width:640px){
+.tw table.st thead{display:none}
+.tw table.st,.tw table.st tbody,.tw table.st tr,.tw table.st td{display:block;width:100%}
+.tw table.st tr{border:1px solid var(--line);border-radius:12px;padding:4px 12px;margin-bottom:10px;background:var(--bg2)}
+.tw table.st tbody tr:hover{background:var(--bg2)}
+.tw table.st td{display:flex;align-items:center;justify-content:space-between;gap:12px;border:0;padding:7px 0;white-space:normal;text-align:right;min-height:34px}
+.tw table.st td+td{border-top:1px dashed var(--line)}
+.tw table.st td::before{content:attr(data-label);color:var(--mut);font-size:12px;text-align:left;flex:none;max-width:42%}
+.tw table.st td.nolabel::before{display:none}.tw table.st td.nolabel{justify-content:flex-start;text-align:left}
+.tw table.st td>input:not([type=checkbox]),.tw table.st td>select{flex:1;min-width:0!important;width:auto!important;max-width:none!important}
+.tw table.st td>.row,.tw table.st td>div{justify-content:flex-end;flex-wrap:wrap}
+.tw table.st td>.cv{display:block;text-align:right;min-width:0}
+.tw{margin:0;padding:0}}
 `;
 
 /** 浏览器端主程序（toString 后内联） */
@@ -426,7 +445,7 @@ function clientMain() {
       </div></div><p class="mut" style="margin:14px 0 0">额度于 UTC 0 点（北京时间 8 点）重置${sm.resetAt ? '，下次 ' + fmtT(sm.resetAt) : ''}。${mainLine()}</p></div>
     <div class="card"><h2><i></i>订阅链接</h2>${sub ? links.map(([n, u]) => `<div class="f" style="margin-bottom:10px"><label>${h(n)}</label><div class="sub"><input readonly value="${h(u)}"><button class="btn" data-copy="${h(u)}">复制</button></div></div>`).join('') : '<p class="mut">未生成</p>'}
       <p class="mut" style="margin:6px 0 0">所有用户共用同一个链接即可：格式按客户端 UA 自适应，节点按访问者运营商与 IP 段自动分配。</p></div>
-    ${sub ? `<div class="card"><h2><i></i>一键导入</h2><p class="mut" style="margin:0 0 10px">在装了客户端的设备上打开后台点一下直接导入；另一台设备用客户端扫右边的二维码。</p>
+    ${sub ? `<div class="card"><h2><i></i>一键导入</h2><p class="mut" style="margin:0 0 10px">在装了客户端的设备上打开后台点一下直接导入；另一台设备用客户端扫这个二维码。</p>
       <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;flex:1;min-width:240px">${imports.map(([n, d, u]) => `<a class="btn" style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-decoration:none" href="${h(u)}"><b>${h(n)}</b><span class="mut" style="font-size:12px">${h(d)}</span></a>`).join('')}</div>
       <img src="/admin/api/sub/qr" alt="订阅二维码" width="200" height="200" style="border-radius:10px;background:#fff;flex:none"></div></div>` : ''}
     <div class="card"><h2><i></i>节点站点（互联）</h2>
@@ -731,6 +750,9 @@ function clientMain() {
     main.innerHTML = `<div class="top"><h1>${PAGES[tab][0]}</h1><span class="sub-h">${h(S.host || '')}</span></div>` + PAGES[tab][1]();
     buildToc(main);
     bind(main);
+    // 手机上导航横向滚动：把当前页的按钮滚到看得见的位置（不然靠右的页面按钮会被挤到边缘、被"退出"挡住）
+    const nv = $('nav'), cur = nv && nv.querySelector('button.on');
+    if (cur && nv.scrollWidth > nv.clientWidth) nv.scrollLeft = Math.max(0, cur.offsetLeft - (nv.clientWidth - cur.offsetWidth) / 2);
   }
 
   // ---------------- 页内索引 ----------------
@@ -739,7 +761,7 @@ function clientMain() {
   const tocTitle = (card) => {
     const t = card.querySelector('h2')?.cloneNode(true);
     if (!t) return '';
-    t.querySelectorAll('.btn, .hint, .sp, label, select, input').forEach((x) => x.remove());
+    t.querySelectorAll('.btn, .hint, .sp, label, select, input, .mut, .pill, .tag').forEach((x) => x.remove());
     return t.textContent.replace(/（[^）]*）|\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
   };
   // 用户页的卡片在 #usersRoot / #usersAcc 里（异步渲染），也算进索引
@@ -1018,6 +1040,36 @@ function clientMain() {
       await api('reset', 'POST', { scope, confirm: 'RESET' }); toast('已重置'); await reload();
     });
   }
+
+  // 手机上把表格排成"一行一张小卡片"：给每个格子写上列名（640px 以下的 CSS 用它显示）。
+  // 后加载的表格（用户列表、日志、检测结果等）由观察器自动处理；只改属性，不会再触发观察器
+  function stackTables(root) {
+    root.querySelectorAll('.tw table').forEach((t) => {
+      const heads = [...t.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+      if (!heads.length) return;
+      t.classList.add('st');
+      t.querySelectorAll('tbody tr').forEach((tr) => {
+        let i = 0;
+        for (const td of tr.children) {
+          const span = Number(td.getAttribute('colspan')) || 1;
+          const label = span > 1 ? '' : heads[i] || '';
+          if (td.dataset.label !== label) td.dataset.label = label;
+          td.classList.toggle('nolabel', !label);
+          // 一个格子里有多段内容（例如 "2 默认"、状态 + 解封时间）：包成一块，手机上作为整体右对齐，不被拆到两端
+          const parts = [...td.childNodes].filter((n) => n.nodeType === 1 || (n.nodeType === 3 && n.textContent.trim()));
+          if (label && (parts.length > 1 || (parts.length === 1 && parts[0].nodeType === 3))) {
+            const w = document.createElement('span');
+            w.className = 'cv';
+            while (td.firstChild) w.appendChild(td.firstChild);
+            td.appendChild(w);
+          }
+          i += span;
+        }
+      });
+    });
+  }
+  let stackTimer = 0;
+  new MutationObserver(() => { clearTimeout(stackTimer); stackTimer = setTimeout(() => stackTables($('main')), 30); }).observe($('main'), { childList: true, subtree: true });
 
   async function reload() {
     S = await api('state');
