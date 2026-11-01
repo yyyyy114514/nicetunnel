@@ -9,7 +9,7 @@
 - **订阅刷新几乎不耗额度**：一次刷新 = 1 次请求；用量查询、规则列表、IP 段都由 Cron 后台分批更新；KV 写入有预算和限频（免费版每天 1000 次）。
 - **优质 + 优选订阅 + 兜底三组节点可同时开启**：优质 = 自定义来源（如 gate 的住宅 SSTP 链式节点）；优选订阅 = 可设置多个优选 URL / 优选订阅生成器（IP 列表、CloudflareSpeedTest CSV、`sub://` 生成器、节点订阅），URL 里的 `{isp}` 按访问者运营商自动替换；兜底 = 随机优选 CF IP。
 - **随机优选少超时**：节点池里一部分直接取自"优选订阅"里的已知可用地址（比例可调），其余按访问者运营商从对应 CIDR 抽取；同一份订阅里每个节点都在不同 /24、端口倾向 443；IP 池按时间窗渐进轮换（默认每小时换 25%），节点名稳定，客户端测速结果不会每次刷新都作废；Clash/sing-box 里自动选择组自带 `lazy` 测速，坏节点会被客户端自动避开。
-- **内置订阅转换**：直接读取你的 subconverter INI（`ruleset` / `custom_proxy_group`），原生生成 Clash(mihomo)、Surge、sing-box、v2rayN/Shadowrocket 通用订阅，不再依赖第三方 SUBAPI。
+- **内置订阅转换**：直接读取你的 subconverter INI（`ruleset` / `custom_proxy_group`），原生生成 Clash(mihomo)、Surge、sing-box、v2rayN/Shadowrocket 通用订阅，不再依赖第三方 SUBAPI。sing-box 默认按 1.12+ 的新写法生成（旧写法在 1.14 移除），UA 能看出是 1.12 以下的老客户端时自动用旧写法。
 - **订阅地址不变**：`/sub?token=…`（及 `&b64` `&clash` `&sb` `&surge`、UA 自动识别）、`/<KEY>` 快速订阅与 edgetunnel 完全一致，token 算法相同，老用户无感迁移。
 
 > **下载**：打包好的 `nicetunnel.zip`（主站）与 `nicetunnel-node.zip`（节点）见本仓库 [Releases](../../releases)；也可以自己 `node scripts/build.mjs` 构建。
@@ -185,6 +185,26 @@ npm run build -- --no-extras       # zip 里只放 _worker.js
 - **密钥**：订阅链接用主站 KV 里的主密钥签名；节点账号 KV 里只有由它派生的节点密钥（只能算用户 UUID），节点账号泄露也伪造不了订阅链接。
 - **原来的共享订阅仍然有效**：不带 `/_u` 前缀的连接照旧用共享 UUID，封禁和并行限制管不到它。原共享链接发出去过的话，要换 UUID（主站和所有节点一起改）才能收回。
 - **Token 权限**：自动配置要求节点 Token 有 KV 编辑和 Pages 编辑权限，比只读用量的 Token 权限大；主站后台一旦失守，影响也更大。配置完可以把这两项权限去掉（之后的下发只需要 KV 写入：保留 Workers KV Storage: Edit 即可）。
+
+## 一键导入
+
+- **概览页「一键导入」**：Clash 系 / sing-box / Shadowrocket / Stash / Surge / Hiddify 的导入按钮，外加订阅二维码（另一台设备扫码）。
+- **专属订阅落地页**：用户在浏览器里打开自己的专属链接，看到的是导入页（按钮 + 二维码 + 复制），不是一堆配置文本；代理客户端拉同一个链接照常拿订阅。带了 `target` 等格式参数时也照常给订阅。后台「用户」页每行有「导入页」按钮。
+- 二维码在本地生成，页面不加载任何外部资源。
+
+## 家宽订阅（客户端链式，可选，默认关闭）
+
+思路来自 [cfnew](https://github.com/byjoey/cfnew) 的"家宽链式"：出口换成 VPN Gate 志愿者的住宅宽带，适合一见机房 IP 就弹验证码的网站。
+
+- 链路：`客户端 → 你的 CF 节点 → 住宅宽带（OpenVPN）→ 目标站`。OpenVPN 由客户端自己跑（mihomo 的 `type: openvpn` + `dialer-proxy`），Worker 只做普通 TCP 转发——和「地区路由」（Worker 里跑 SSTP）不同，**免费版也不会被掐断**。
+- 开启：后台「节点来源」→ 家宽，勾启用；订阅链接后面加 `&target=home`（专属链接同样可以）。概览页和用户落地页会多一个「Clash 家宽」导入按钮。
+- 列表由 Cron 每小时从 VPN Gate 拉一次（约 1MB，只留 TCP 节点、去掉 VPN Gate 自营的机房服务器、按得分取前 N 个）；可以在后台点「立即刷新列表」。列表还没拉到时订阅返回 503，客户端会继续用上一份。
+- 只有 **mihomo 1.19.25 以上** 能用（Clash Verge Rev / FlClash / Clash Meta for Android），所以只出 Clash 格式；只走 TCP。前置只用你的 TLS 节点。
+- 节点是志愿者共享的，掉线是常态（大约一半能通）；`🏠 家宽自动` 会自动换下一个，想挑国家在 `🏠 家宽节点` 里手选。速度取决于对方家里的上传。
+
+## 自建 ProxyIP（访问套了 CF 的网站更快更稳）
+
+Worker 连不了 Cloudflare 的 IP，访问套了 CF 的网站（ChatGPT、X 等）要经 ProxyIP 中转。不设 `PROXYIP` 时用的是公共反代，多人共用，常常又远又慢。最有效的办法是在**主站**设一个离用户近、稳定的 `PROXYIP`（会自动写进所有节点的订阅路径）。手里有 VPS 的话可以自建：在 VPS 上用 Reality / 反代把 443 端口转发到 Cloudflare（IPv6 VPS 也可以），然后把 VPS 地址填进 `PROXYIP`。
 
 ## KV 用量
 

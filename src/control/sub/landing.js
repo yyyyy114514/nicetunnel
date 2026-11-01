@@ -6,9 +6,10 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 
 /** 各客户端的一键导入链接（只放格式确定的客户端） */
-export function importLinks(subUrl, name = '') {
+export function importLinks(subUrl, name = '', { home = false } = {}) {
   const u = encodeURIComponent(subUrl);
   const n = encodeURIComponent(name || '订阅');
+  const homeLink = home ? [{ id: 'home', label: 'Clash 家宽', note: '住宅宽带出口（mihomo 1.19.25+）', href: `clash://install-config?url=${encodeURIComponent(subUrl + '&target=home')}&name=${encodeURIComponent((name || '订阅') + ' 家宽')}` }] : [];
   return [
     { id: 'clash', label: 'Clash 系', note: 'Clash Verge Rev / FlClash / Clash Meta for Android', href: `clash://install-config?url=${u}&name=${n}` },
     { id: 'singbox', label: 'sing-box', note: 'SFA / SFI / SFM（1.12 及以上）', href: `sing-box://import-remote-profile?url=${u}#${n}` },
@@ -16,6 +17,7 @@ export function importLinks(subUrl, name = '') {
     { id: 'stash', label: 'Stash', note: 'iOS', href: `stash://install-config?url=${u}` },
     { id: 'surge', label: 'Surge', note: 'iOS / macOS', href: `surge:///install-config?url=${u}` },
     { id: 'hiddify', label: 'Hiddify', note: '全平台', href: `hiddify://import/${subUrl}#${n}` },
+    ...homeLink,
   ];
 }
 
@@ -23,11 +25,11 @@ export function importLinks(subUrl, name = '') {
  * @param {{siteName:string, subUrl:string, name?:string}} o
  * @returns {string}
  */
-export function landingHtml({ siteName, subUrl, name = '' }) {
+export function landingHtml({ siteName, subUrl, name = '', home = false }) {
   const title = name ? `${name} 的订阅` : '我的订阅';
   let qr = '';
   try { qr = qrSvg(subUrl, { px: 5 }); } catch { qr = ''; }
-  const buttons = importLinks(subUrl, name || siteName).map((l) => `<a class="btn" href="${esc(l.href)}"><b>${esc(l.label)}</b><span>${esc(l.note)}</span></a>`).join('');
+  const buttons = importLinks(subUrl, name || siteName, { home }).map((l) => `<a class="btn" href="${esc(l.href)}"><b>${esc(l.label)}</b><span>${esc(l.note)}</span></a>`).join('');
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${esc(title)}</title>
 <style>
 :root{--bg:#f6f7fb;--card:#fff;--fg:#1d2433;--mut:#6b7385;--line:#e4e7ef;--pri:#5b5bf0}

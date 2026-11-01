@@ -18,6 +18,7 @@ import { HOST_CHECK_TTL_MS } from '../control/allocator.js';
 import { sendTelegram, notifyUsageEvents, telegramConfigured, formatTime, escapeHtml, defaultNotifyState, redactSecrets } from '../control/notify.js';
 import { createUsersRoutes } from './users-api.js';
 import { qrSvg } from '../lib/qr.js';
+import { refreshHome, loadHome } from '../control/homefeed.js';
 
 const MAX_BODY = 2 * 1024 * 1024;
 const PREVIEW_BODY_LIMIT = 20 * 1024;
@@ -734,6 +735,12 @@ export function createAdminApi(deps = {}) {
     'POST rules/refresh': refreshRules,
     'POST rules/ini/fetch': fetchIni,
     'POST reset': reset,
+    // 家宽：立即拉一次 VPN Gate 列表（不管开没开，方便先试）
+    'POST home/refresh': async (ctx, c) => {
+      const r = await refreshHome({ store: c.store, settings: c.settings, fetchFn: c.fetchFn, now: c.now, force: true });
+      const data = r.ok ? await loadHome(c.store) : null;
+      return jsonResponse({ ok: true, ...r, entries: (data?.entries || []).map((e) => ({ cc: e.cc })) });
+    },
     // 概览页"一键导入"的二维码：只为主站自己的订阅链接生成（不接受任意内容）
     'GET sub/qr': async (ctx, c) => {
       const host = c.identity.host || ctx.url?.hostname || new URL(ctx.request.url).hostname;

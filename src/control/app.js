@@ -168,7 +168,7 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       // 用户在浏览器里打开自己的链接（只带 u 参数）：给落地页（一键导入 / 二维码 / 复制），不给一堆配置文本。
       // 代理客户端的 UA 不是浏览器，或者带了 target 等格式参数时，照常返回订阅
       if (browserUa && [...url.searchParams.keys()].every((k) => k === 'u')) {
-        return new Response(landingHtml({ siteName: stored.site?.name || 'nicetunnel', subUrl: `${url.protocol}//${url.host}/sub?u=${encodeURIComponent(v.token)}`, name: v.user.name }), {
+        return new Response(landingHtml({ siteName: stored.site?.name || 'nicetunnel', subUrl: `${url.protocol}//${url.host}/sub?u=${encodeURIComponent(v.token)}`, name: v.user.name, home: !!stored.preferred?.home?.enabled }), {
           status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' },
         });
       }
@@ -186,11 +186,14 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       return new Response('请求过于频繁，请稍后再试', { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain; charset=utf-8' } });
     }
     // 生成器模式与上游一致：mixed 且非浏览器 UA → base64（486 行）
-    const fi = generatorMode ? { format: 'base64' } : detectFormatInfo(url, ua);
+    // 家宽订阅（&target=home）：只出 Clash 格式（需要 mihomo 1.19.25+ 的 type: openvpn）
+    const home = !generatorMode && url.searchParams.get('target') === 'home';
+    if (home && !settings.preferred?.home?.enabled) return new Response('家宽订阅未开启', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+    const fi = generatorMode ? { format: 'base64' } : home ? { format: 'clash' } : detectFormatInfo(url, ua);
     const format = fi.format;
     try {
       const out = await buildSubscription({
-        store, settings, identity, request, url, now, waitUntil, format, ip, ua, generatorMode, unsupportedFormat: fi.unsupported, user, muReady,
+        store, settings, identity, request, url, now, waitUntil, format, ip, ua, generatorMode, unsupportedFormat: fi.unsupported, user, muReady, home,
         // 生成器模式不需要 token、也不限速：不接受 sub=（否则匿名请求可以让主站去抓任意地址）；用户订阅也不接受
         subParam: generatorMode || user ? '' : (url.searchParams.get('sub') || ''),
       });
@@ -201,6 +204,8 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       }));
       return new Response(out.body, { status: 200, headers: out.headers });
     } catch (e) {
+      // 家宽列表还没拉到：返回 503，客户端会继续用上一份，不会被空配置覆盖
+      if (e?.code === 'home_unavailable') return new Response('家宽节点还没准备好（每小时更新一次），请稍后再试', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '600' } });
       console.error('[sub] 生成失败', e);
       return new Response('订阅生成失败，请稍后再试', { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
     }

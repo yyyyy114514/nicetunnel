@@ -7,6 +7,7 @@ import { pollAndPersist, refreshCidr } from './pipeline.js';
 import { refreshRulesStep } from './rulesfeed.js';
 import { refreshBest, bestIspKeys } from './bestfeed.js';
 import { syncUsers, MU_KEYS } from './users.js';
+import { refreshHome, HOME_KEY } from './homefeed.js';
 
 /** 每分钟一次的触发器只做多用户同步（在线汇总 + 下发），其它任务仍按 5 分钟那个触发器跑 */
 export const MU_CRON = '* * * * *';
@@ -73,9 +74,18 @@ export async function runScheduled({ event, env, now = Date.now(), fetchFn = glo
   }
 
   // 2) 维护（小块）
-  const task = maintenanceTask(now, settings);
+  let task = maintenanceTask(now, settings);
+  // 家宽列表到了刷新时间（默认每小时）：这一轮只做它（解析 1.3MB 列表要几毫秒 CPU，不和别的维护任务挤在一起）
+  if (settings.preferred?.home?.enabled) {
+    try {
+      const h = await store.getJson(HOME_KEY, 60e3);
+      if (!h || now - (h.fetchedAt || 0) >= (settings.preferred.home.refreshMinutes || 60) * 60e3) task = { kind: 'home' };
+    } catch { /* 忽略 */ }
+  }
   try {
-    if (task.kind === 'best') {
+    if (task.kind === 'home') {
+      report.maintenance = await refreshHome({ store, settings, fetchFn, now });
+    } else if (task.kind === 'best') {
       report.maintenance = await refreshBest({ store, settings, isp: task.isp, fetchFn, now });
     } else if (task.kind === 'cidr') {
       report.maintenance = settings.preferred.random.enabled ? await refreshCidr({ store, isp: task.isp, settings, fetchFn }) : { skipped: 'random disabled' };

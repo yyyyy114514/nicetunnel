@@ -79,3 +79,86 @@ test('专属订阅落地页：浏览器打开给导入页（按钮 + 二维码�
     assert.equal(links.shadowrocket, 'shadowrocket://add/sub://' + btoa('https://x.com/sub?u=a') + '?remark=N');
   } finally { globalThis.fetch = realFetch; }
 });
+
+// ---- 家宽（客户端链式）----
+const PEM = (t) => `-----BEGIN ${t}-----\nMIIB${t}AAAA\n-----END ${t}-----`;
+function vgConfig(proto, ip, port) {
+  const pad = Array.from({ length: 60 }, (_, i) => `# comment line ${i} ......................`).join('\n');
+  return `${pad}\ndev tun\nproto ${proto}\nremote ${ip} ${port}\ncipher AES-128-CBC\nauth SHA1\nclient\n<ca>\n${PEM('CERTIFICATE')}\n</ca>\n<cert>\n${PEM('CERTIFICATE')}\n</cert>\n<key>\n${PEM('PRIVATE KEY')}\n</key>\n`;
+}
+function vgCsv() {
+  const row = (host, ip, score, cc, op, proto, port) => [host, ip, score, 10, 1e8, 'X', cc, 5, 1000, 100, 1e9, '2weeks', op, '', btoa(vgConfig(proto, ip, port))].join(',');
+  return ['*vpn_servers', '#HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,Uptime,TotalUsers,TotalTraffic,LogType,Operator,Message,OpenVPN_ConfigData_Base64',
+    row('public-vpn-1', '219.100.37.1', 9e6, 'JP', 'Daiyuu Nobori_ Japan. Academic Use Only.', 'tcp', 443),
+    row('vpn111', '114.16.18.46', 5e6, 'JP', "someone's PC", 'tcp', 1223),
+    row('vpn222', '116.123.14.251', 4e6, 'KR', 'home', 'tcp', 1236),
+    row('vpn333', '1.2.3.4', 3e6, 'TH', 'home', 'udp', 1194),
+    '*'].join('\r\n');
+}
+
+test('家宽：解析 VPN Gate 列表——只留 TCP、去掉自营机房、证书只存一份；Clash 里节点经家宽前置连过去', async () => {
+  const { parseVpnGate, addHomeToClash } = await import('../src/control/homefeed.js');
+  const r = parseVpnGate(vgCsv(), { max: 10 });
+  assert.deepEqual(r.entries.map((e) => e.ip), ['114.16.18.46', '116.123.14.251']);
+  assert.equal(r.entries[0].port, 1223);
+  assert.ok(r.pems.ca.includes('BEGIN CERTIFICATE') && r.pems.key.includes('PRIVATE KEY'));
+  assert.equal(r.cipher, 'AES-128-CBC');
+  assert.equal(r.auth, 'SHA1');
+  assert.equal(parseVpnGate(vgCsv(), { excludeOfficial: false }).entries.length, 3);
+  const proxies = [
+    { name: 'tls-1', obj: { name: 'tls-1', type: 'vless', tls: true }, desc: {} },
+    { name: 'plain-1', obj: { name: 'plain-1', type: 'vless', tls: false }, desc: {} },
+    { name: 'third', obj: { name: 'third', type: 'trojan', tls: true }, desc: null },
+  ];
+  const groups = [{ name: '🚀 节点选择', type: 'select', proxies: ['tls-1', 'plain-1'] }];
+  const h = addHomeToClash({ ...r, fetchedAt: 1 }, proxies, groups);
+  assert.equal(h.added, 2);
+  const ov = h.proxies.filter((p) => p.obj.type === 'openvpn');
+  assert.deepEqual(ov.map((p) => p.name), ['🏠 JP-01', '🏠 KR-01']);
+  assert.equal(ov[0].obj['dialer-proxy'], '🛫 家宽前置');
+  assert.equal(ov[0].obj.proto, 'tcp');
+  assert.equal(ov[0].obj.udp, false);
+  assert.deepEqual(h.groups.find((g) => g.name === '🛫 家宽前置').proxies, ['tls-1'], '前置只用本项目的 TLS 节点');
+  assert.deepEqual(h.groups[0].proxies.slice(0, 2), ['🏠 家宽自动', '🏠 家宽节点'], '默认走家宽');
+  assert.equal(h.groups.find((g) => g.name === '🏠 家宽自动').type, 'fallback');
+});
+
+test('家宽订阅：开启后 &target=home 出 Clash（OpenVPN 节点 + 家宽组）；没开 403；列表没准备好 503；Cron 到点刷新', async () => {
+  const worker = (await import('../src/index.js')).default;
+  const { resetStoreState, createStore } = await import('../src/control/store.js');
+  const { resetPipelineState } = await import('../src/control/pipeline.js');
+  const { deriveIdentity } = await import('../src/control/identity.js');
+  const { runScheduled } = await import('../src/control/cron.js');
+  const { HOME_KEY } = await import('../src/control/homefeed.js');
+  const { memKV, fakeFetch, settingsWith } = await import('./helpers.mjs');
+  const realFetch = globalThis.fetch;
+  try {
+    resetStoreState(); resetPipelineState();
+    globalThis.fetch = fakeFetch({});
+    const kv = memKV({ 'nt.settings': settingsWith({ preferred: { home: { enabled: true } } }), 'nt.accounts': [] });
+    const env = { KV: kv, ADMIN: 'pw' };
+    const id = deriveIdentity(env, 'vp.example.com');
+    const get = (q) => worker.fetch(new Request('https://vp.example.com/sub?token=' + id.subToken + q, { headers: { 'User-Agent': 'clash-verge/v2.2.3' } }), env, { waitUntil() {} });
+    assert.equal((await get('&target=home')).status, 503, '列表还没拉到');
+    // Cron：到点刷新（从假的 VPN Gate 接口拉）
+    const r = await runScheduled({ env, fetchFn: async () => new Response(vgCsv()), now: Date.now() });
+    assert.equal(r.maintenance?.ok, true, JSON.stringify(r.maintenance));
+    assert.equal(JSON.parse(kv.m.get(HOME_KEY)).entries.length, 2);
+    resetStoreState();
+    const res = await get('&target=home');
+    assert.equal(res.status, 200);
+    const yaml = await res.text();
+    const ovLines = yaml.split('\n').filter((l) => l.includes('"type":"openvpn"'));
+    assert.equal(ovLines.length, 2);
+    const ov = JSON.parse(ovLines[0].replace(/^\s*- /, ''));
+    assert.equal(ov['dialer-proxy'], '🛫 家宽前置');
+    assert.ok(ov.ca.includes('\n'), 'PEM 多行，写成 JSON 转义（YAML 双引号字符串）');
+    assert.ok(yaml.includes('"name":"🏠 家宽自动"'));
+    // 普通订阅不受影响
+    assert.ok(!(await (await get('')).text()).includes('openvpn'));
+    // 关掉：403
+    kv.m.set('nt.settings', JSON.stringify(settingsWith({ preferred: { home: { enabled: false } } })));
+    resetStoreState();
+    assert.equal((await get('&target=home')).status, 403);
+  } finally { globalThis.fetch = realFetch; }
+});

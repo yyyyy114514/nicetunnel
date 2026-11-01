@@ -161,6 +161,13 @@ function clientMain() {
         ['preferred.best.refreshSeconds', '刷新间隔（秒）', 'num', null, 1],
         ['preferred.best.namePrefix', '名称前缀', 'text', null, 1],
       ] },
+      { t: "家宽（客户端链式，仅 Clash / mihomo）", act: [['homeRefresh', '立即刷新列表']], out: 'outHome', d: '订阅链接加 &target=home 得到"家宽"订阅：出口是 VPN Gate 志愿者的住宅宽带（适合一见机房 IP 就弹验证的网站）。OpenVPN 由客户端自己跑、经你的 CF 节点连过去，Worker 只做普通转发，免费版也不会被掐断。需要 mihomo 1.19.25 以上（Clash Verge Rev / FlClash / Clash Meta for Android），只走 TCP；节点是志愿者共享的，掉线是常态（约一半能通），家宽自动组会自动换。', f: [
+        ['preferred.home.enabled', '启用家宽订阅', 'bool'],
+        ['preferred.home.maxNodes', '住宅节点数量上限（按 VPN Gate 得分取前 N 个）', 'num'],
+        ['preferred.home.excludeOfficial', '排除 VPN Gate 自营的机房服务器（只留住宅宽带）', 'bool', null, 1],
+        ['preferred.home.refreshMinutes', '列表刷新间隔（分钟，Cron 拉取）', 'num', null, 1],
+        ['preferred.home.sourceUrl', '列表地址（留空 = VPN Gate 官方接口）', 'text', null, 1],
+      ] },
       { t: "兜底节点（随机优选 CF IP）", act: [['testCidr', '测试 CIDR']], out: 'outCidr', f: [
         ['preferred.random.enabled', '启用', 'bool'],
         ['preferred.random.aggregate', '只显示一个随机优选（节点只出现在测速组里，不在手动选择列表逐个列出）', 'bool', null, 0, '客户端里只看到一个"随机优选"自动选择组，由它自动挑最快的 CF IP。仅 Clash / Surge / sing-box 生效'],
@@ -393,6 +400,7 @@ function clientMain() {
       ['Stash', 'iOS', `stash://install-config?url=${enc(sub)}`],
       ['Surge', 'iOS / macOS', `surge:///install-config?url=${enc(sub)}`],
       ['Hiddify', '全平台', `hiddify://import/${sub}#${siteN}`],
+      ...(S.settings.preferred?.home?.enabled ? [['Clash 家宽', '住宅宽带出口（mihomo 1.19.25+）', `clash://install-config?url=${enc(sub + '&target=home')}&name=${enc((S.settings.site?.name || '订阅') + ' 家宽')}`]] : []),
     ] : [];
     const paceTxt = (p) => (p == null ? '<span class="mut">-</span>' : p >= 1.15 ? `<span class="pill p-ok">加量 ×${p}</span>` : p <= 0.85 ? `<span class="pill p-low">减量 ×${p}</span>` : `<span class="pill p-stale">均衡</span>`);
     const checks = (S.checks || []).length ? `<div class="card"><h2><i></i>配置自检<span class="sp"></span><span class="mut" style="font-weight:500">${S.checks.filter((c) => c.level === 'warn').length} 项需要处理 · ${S.checks.filter((c) => c.level === 'info').length} 项提示</span></h2>${S.checks.map((c) => `<div class="note" style="display:flex;gap:10px;align-items:flex-start"><span class="pill ${c.level === 'warn' ? 'p-low' : 'p-stale'}" style="flex:none">${c.level === 'warn' ? '需处理' : '提示'}</span><span>${h(c.text)}</span></div>`).join('')}</div>` : '';
@@ -864,6 +872,15 @@ function clientMain() {
       showOut('outRegions', `<h3>地区列表：${r.regions.length} 个地区 / ${r.count} 个节点（${r.ms}ms）</h3>${r.warnings?.length ? `<pre>${h(r.warnings.join('\n'))}</pre>` : ''}<div class="row">${r.regions.map((g) => `<span class="tag">${h(g.name)} × ${g.nodes}</span>`).join('') || '<span class="mut">没有解析到任何地区，请检查列表格式与地区规则</span>'}</div><p class="mut" style="margin:10px 0 0">入口地址：${r.entries} 个${r.entries ? '' : '（列表里没有入口地址，将使用随机优选池的地址作为入口）'}</p>`);
     });
     on('testCidr', () => testSrc('cidr', 'outCidr'));
+    on('homeRefresh', async () => {
+      showOut('outHome', '<p class="mut">正在拉取 VPN Gate 列表（约 1MB，可能要几十秒）…</p>');
+      const r = await api('home/refresh', 'POST', {});
+      const cc = {};
+      for (const e of r.entries || []) cc[e.cc] = (cc[e.cc] || 0) + 1;
+      showOut('outHome', r.ok
+        ? `<h3>已更新：${r.count} 个住宅节点</h3><pre>${h(Object.entries(cc).map(([k, n]) => k + ' × ' + n).join('　'))}</pre><p class="mut">家宽订阅：订阅链接后面加 &amp;target=home（概览页「一键导入」里有 Clash 家宽按钮）</p>`
+        : `<h3>没有更新</h3><pre>${h(r.error || r.skipped || '')}</pre>`);
+    });
     on('pv', async () => {
       const r = await api('preview', 'POST', { format: 'raw', settings: collectPatch(root) });
       const share = Object.entries(r.hostShare || {}).sort((a, b) => b[1] - a[1]);

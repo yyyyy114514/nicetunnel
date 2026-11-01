@@ -17,6 +17,7 @@ import { loadRegionStructure, buildRegionSpecs, newRegionCache } from './regions
 import { renderSubscription } from './sub/index.js';
 import { KEYS } from './store.js';
 import { muPathPrefix } from '../lib/mu.js';
+import { loadHome } from './homefeed.js';
 
 export const PLACEHOLDER_UUID = '00000000-0000-4000-8000-000000000000';
 export const NODE_DEPS = { base64SecretEncode, parseChainAccount, defaultChainPort, replaceStars };
@@ -189,6 +190,10 @@ export async function buildSubscription(o) {
   });
   const nodes = specs.map((s) => (s.origin === 'link' ? { ...s, host: '' } : { ...s, host: replaceStars(hostById.get(s)) }));
 
+  // 家宽订阅：读 Cron 拉好的 VPN Gate 列表（没有就 503，见 app.js）
+  const home = o.home && !o.generatorMode ? await loadHome(store) : null;
+  if (o.home && !home) throw Object.assign(new Error('家宽列表还没准备好'), { code: 'home_unavailable' });
+
   // 4) 规则与渲染
   const rules = await loadRules({ store, settings, fetchFn, now, waitUntil, format: o.format });
   // 测速间隔按号池余量自适应（余量足就让客户端多测速，吃紧自动放慢）
@@ -199,6 +204,7 @@ export async function buildSubscription(o) {
     uuid, settings: renderSettings, now, requestUrl: url.href, subName: settings.site.name,
     userAgent: o.ua || '', generatorMode: !!o.generatorMode, randomPath,
     muPrefix: user ? muPathPrefix(user.id) : '',
+    home,
   };
   const out = renderSubscription({ format: o.format, nodes, ctx, ini: rules.ini, rules });
 

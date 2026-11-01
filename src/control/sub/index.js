@@ -8,6 +8,7 @@ import { clashProxy, clashProxyFromLink, renderClash } from './clash.js';
 import { surgeName, surgeProxyLine, surgeLinkLine, renderSurge } from './surge.js';
 import { singboxOutbound, singboxOutboundFromLink, renderSingbox, legacyDnsFor } from './singbox.js';
 import { groupInterval } from '../allocator.js';
+import { addHomeToClash } from '../homefeed.js';
 
 export const FORMATS = ['mixed', 'base64', 'clash', 'singbox', 'surge'];
 const ALIASES = { raw: 'mixed', b64: 'base64', sb: 'singbox', 'sing-box': 'singbox', mihomo: 'clash', meta: 'clash' };
@@ -111,8 +112,16 @@ export function renderSubscription({ format, nodes, ctx, ini, rules }) {
       if (obj) proxies.push({ name: names[i], obj, desc: e.desc, cf: e.cf });
       else warnings.push(`Clash 不支持的节点已跳过：${names[i]}`);
     });
-    const groups = withTol(resolveGroups(model, proxies.map((p) => p.name), warnings, { hide: hideOf(proxies) }));
-    body = renderClash({ proxies, groups, rules: block, ctx: c, intervalOf });
+    let groups = withTol(resolveGroups(model, proxies.map((p) => p.name), warnings, { hide: hideOf(proxies) }));
+    let list = proxies;
+    // 家宽订阅：加 OpenVPN 住宅节点（经"家宽前置"组的 TLS 节点连过去）和家宽组
+    if (c.home) {
+      const h = addHomeToClash(c.home, proxies, groups);
+      if (!h.added) warnings.push('家宽：没有可做前置的 TLS 节点');
+      list = h.proxies;
+      groups = h.groups;
+    }
+    body = renderClash({ proxies: list, groups, rules: block, ctx: c, intervalOf });
   } else if (fmt === 'surge') {
     const lines = [];
     const kept = [];

@@ -71,6 +71,9 @@ export function defaultSettings() {
       // 列表格式：每行 入口地址#名称$sstp://用户:密码@主机:端口（也支持 socks5/http/https/turn；没有入口地址的行由随机优选池补入口）
       // ⚠ 开启后所有节点站点必须运行本项目的 _worker.js（原版 edgetunnel 不认识地区路由路径）。
       regions: { enabled: false, urls: [], regex: '', kinds: [], nameTemplate: '【{kind}】{region}', kindNames: ['住宅=家宽'], pickK: 10, stickyMinutes: 30, ttlSeconds: 180, refreshSeconds: 1800 },
+      // 家宽（客户端链式，可选）：Clash 专属订阅（&target=home）里加 VPN Gate 住宅宽带的 OpenVPN 节点，由客户端（mihomo）
+      // 经本项目的 CF 节点连过去（dialer-proxy）。Worker 只做普通转发，免费版也不会被掐断。见 control/homefeed.js
+      home: { enabled: false, maxNodes: 40, excludeOfficial: true, sourceUrl: '', refreshMinutes: 60 },
       // 兜底：随机优选 CF IP
       random: {
         enabled: true,
@@ -264,6 +267,12 @@ export function normalizeSettings(raw) {
   g.stickyMinutes = int(g.stickyMinutes, 30, 0, 1440); // 0=每条连接随机挑
   g.ttlSeconds = int(g.ttlSeconds, 180, 15, 3600);
   g.refreshSeconds = int(g.refreshSeconds, 1800, 60, 86400);
+  const hm = s.preferred.home;
+  hm.enabled = bool(hm.enabled, false);
+  hm.maxNodes = int(hm.maxNodes, 40, 1, 200);
+  hm.excludeOfficial = bool(hm.excludeOfficial, true);
+  hm.sourceUrl = /^https:\/\//i.test(str(hm.sourceUrl)) ? str(hm.sourceUrl) : '';
+  hm.refreshMinutes = int(hm.refreshMinutes, 60, 15, 1440);
   const r = s.preferred.random;
   r.enabled = bool(r.enabled, true);
   r.count = int(r.count, 16, 0, 200);
