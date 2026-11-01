@@ -212,7 +212,7 @@ function clientMain() {
         ['proxy.mode', '反代方式', 'sel', ['proxyip', 'socks5', 'http', 'https', 'turn', 'sstp']],
         ['proxy.proxyip', 'PROXYIP（auto=自动）', 'text'],
         ['proxy.chain.account', '链式代理账号（user:pass@host:port）', 'text'],
-        ['proxy.chain.global', '全局走链式代理', 'bool'],
+        ['proxy.chain.global', '全局走链式代理（只走代理，连不上直接断开）', 'bool', null, 0, '勾选：所有流量都走链式代理，代理连不上就断开，绝不回落直连——出口 IP 不会变成 Cloudflare 的（用住宅 IP 登录敏感账号时选这个）。不勾：先直连，直连失败（例如套了 CF 的网站）才走代理'],
         ['proxy.socks5Whitelist', 'SOCKS5 白名单（每行一个）', 'list', null, 1],
       ] },
       { t: "伪装页", f: [
@@ -383,6 +383,17 @@ function clientMain() {
     const sm = S.pool?.summary || {}, hosts = (S.pool?.hosts || []).slice().sort((a, b) => a.host.localeCompare(b.host, 'en', { numeric: true }));
     const sub = S.subUrl || '';
     const links = [['通用（base64）', sub], ['Clash / mihomo', sub + '&clash'], ['sing-box', sub + '&sb'], ['Surge', sub + '&surge']];
+    // 一键导入（与专属订阅落地页同一套客户端链接格式，见 control/sub/landing.js importLinks）
+    const enc = encodeURIComponent, siteN = enc(S.settings.site?.name || '订阅');
+    const b64u = (s) => btoa(unescape(encodeURIComponent(s)));
+    const imports = sub ? [
+      ['Clash 系', 'Clash Verge Rev / FlClash / CMFA', `clash://install-config?url=${enc(sub)}&name=${siteN}`],
+      ['sing-box', 'SFA / SFI / SFM', `sing-box://import-remote-profile?url=${enc(sub)}#${siteN}`],
+      ['Shadowrocket', 'iOS 小火箭', `shadowrocket://add/sub://${b64u(sub)}?remark=${siteN}`],
+      ['Stash', 'iOS', `stash://install-config?url=${enc(sub)}`],
+      ['Surge', 'iOS / macOS', `surge:///install-config?url=${enc(sub)}`],
+      ['Hiddify', '全平台', `hiddify://import/${sub}#${siteN}`],
+    ] : [];
     const paceTxt = (p) => (p == null ? '<span class="mut">-</span>' : p >= 1.15 ? `<span class="pill p-ok">加量 ×${p}</span>` : p <= 0.85 ? `<span class="pill p-low">减量 ×${p}</span>` : `<span class="pill p-stale">均衡</span>`);
     const checks = (S.checks || []).length ? `<div class="card"><h2><i></i>配置自检<span class="sp"></span><span class="mut" style="font-weight:500">${S.checks.filter((c) => c.level === 'warn').length} 项需要处理 · ${S.checks.filter((c) => c.level === 'info').length} 项提示</span></h2>${S.checks.map((c) => `<div class="note" style="display:flex;gap:10px;align-items:flex-start"><span class="pill ${c.level === 'warn' ? 'p-low' : 'p-stale'}" style="flex:none">${c.level === 'warn' ? '需处理' : '提示'}</span><span>${h(c.text)}</span></div>`).join('')}</div>` : '';
     return checks + `<div class="card"><h2><i></i>号池额度<span class="sp"></span><button class="btn" id="poll">立即轮询</button></h2>
@@ -395,6 +406,9 @@ function clientMain() {
       </div></div><p class="mut" style="margin:14px 0 0">额度于 UTC 0 点（北京时间 8 点）重置${sm.resetAt ? '，下次 ' + fmtT(sm.resetAt) : ''}。${mainLine()}</p></div>
     <div class="card"><h2><i></i>订阅链接</h2>${sub ? links.map(([n, u]) => `<div class="f" style="margin-bottom:10px"><label>${h(n)}</label><div class="sub"><input readonly value="${h(u)}"><button class="btn" data-copy="${h(u)}">复制</button></div></div>`).join('') : '<p class="mut">未生成</p>'}
       <p class="mut" style="margin:6px 0 0">所有用户共用同一个链接即可：格式按客户端 UA 自适应，节点按访问者运营商与 IP 段自动分配。</p></div>
+    ${sub ? `<div class="card"><h2><i></i>一键导入</h2><p class="mut" style="margin:0 0 10px">在装了客户端的设备上打开后台点一下直接导入；另一台设备用客户端扫右边的二维码。</p>
+      <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;flex:1;min-width:240px">${imports.map(([n, d, u]) => `<a class="btn" style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-decoration:none" href="${h(u)}"><b>${h(n)}</b><span class="mut" style="font-size:12px">${h(d)}</span></a>`).join('')}</div>
+      <img src="/admin/api/sub/qr" alt="订阅二维码" width="200" height="200" style="border-radius:10px;background:#fff;flex:none"></div></div>` : ''}
     <div class="card"><h2><i></i>节点站点（互联）</h2>
       <div class="f" style="margin-bottom:10px"><label>UUID（所有节点站点必须与主站一致）· 来源：${S.uuidSource === 'derived' ? '由 ADMIN + KEY 推导（没有设置合法的 UUID 环境变量）' : '环境变量 UUID'}</label><div class="sub"><input readonly value="${h(S.uuid || '')}"><button class="btn" data-copy="${h(S.uuid || '')}">复制</button></div></div>
       <p class="mut" style="margin:0">每个节点站点只需要：① 上传同一份 <code>_worker.js</code>（可以是旧版本，只要数据面版本不低于 v${S.dataplane?.version ?? 1}）；② 环境变量 <code>UUID</code> 填上面这个（不需要 ADMIN）；③ <b>不要绑定 KV</b>；④ 绑定自己的域名并在「账号」页添加。主站升级通常不需要重新部署节点——在「账号」页点「检测节点」可以看到每个节点的数据面版本。</p></div>
@@ -533,7 +547,7 @@ function clientMain() {
       const online = s ? (s.online ? '<b>' + s.online + '</b>' : '0') + (u.effLimit && s.online > u.effLimit ? ' <span class="pill p-exhausted">超限</span>' : '') : '<span class="mut">-</span>';
       return '<tr><td><input type="checkbox" data-upick="' + u.id + '" ' + (U.picked.has(u.id) ? 'checked' : '') + '></td><td class="mono">' + u.id + '</td><td><input data-uname="' + u.id + '" value="' + h(u.name) + '" style="min-width:90px"></td>'
         + '<td>' + (u.banned ? '<span class="pill p-exhausted">已封禁</span>' : '<span class="pill p-ok">正常</span>') + '</td><td>' + lim + '</td><td>' + online + '</td><td>' + (s && s.conns != null ? fmtN(s.conns) : '<span class="mut">-</span>') + '</td><td>' + (s && s.lastSeen ? fmtT(s.lastSeen) : '<span class="mut">-</span>') + '</td>'
-        + '<td><div class="row" style="flex-wrap:nowrap;gap:4px"><input class="mono" readonly value="' + h(u.sub) + '" style="min-width:160px"><button class="btn sm" data-copy="' + h(u.sub) + '">复制</button></div></td></tr>';
+        + '<td><div class="row" style="flex-wrap:nowrap;gap:4px"><input class="mono" readonly value="' + h(u.sub) + '" style="min-width:160px"><button class="btn sm" data-copy="' + h(u.sub) + '">复制</button><a class="btn sm" href="' + h(u.sub) + '" target="_blank" rel="noopener noreferrer" title="用户在浏览器里打开链接看到的页面：各客户端一键导入、二维码">导入页</a></div></td></tr>';
     }).join('');
     const pages = Math.max(1, Math.ceil(d.matched / d.limit));
     const page = Math.floor(d.offset / d.limit) + 1;

@@ -14,6 +14,7 @@ import { UUID_RE } from './identity.js';
 import { handleLogin, handleLogout, requireAuth, isAuthed, bearerToken, safeEqual } from './auth.js';
 import { trackRequest } from './logs.js';
 import { verifySubToken, readyAccountSet } from './users.js';
+import { landingHtml } from './sub/landing.js';
 import { buildSubscription, pollAndPersist } from './pipeline.js';
 import { refreshRulesStep, getRulesStatus, fetchAndSaveIni } from './rulesfeed.js';
 import { detectFormatInfo } from './sub/index.js';
@@ -164,6 +165,13 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       if (!v.ok && v.code === 'banned') return new Response('此链接已停用', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
       if (!v.ok) return camouflage(request, url, env.URL || 'nginx');
       user = { id: v.user.id, uuid: v.uuid, token: v.token };
+      // 用户在浏览器里打开自己的链接（只带 u 参数）：给落地页（一键导入 / 二维码 / 复制），不给一堆配置文本。
+      // 代理客户端的 UA 不是浏览器，或者带了 target 等格式参数时，照常返回订阅
+      if (browserUa && [...url.searchParams.keys()].every((k) => k === 'u')) {
+        return new Response(landingHtml({ siteName: stored.site?.name || 'nicetunnel', subUrl: `${url.protocol}//${url.host}/sub?u=${encodeURIComponent(v.token)}`, name: v.user.name }), {
+          status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' },
+        });
+      }
       muReady = await readyAccountSet(store);
     }
     // 反代 IP 为 auto 时，各站点用自己的环境变量 PROXYIP，没设就用公共默认反代（多人共用、常慢或不可用）。

@@ -6,7 +6,7 @@ import { resolveGroups, uniqueNames } from './groups.js';
 import { parseIni, DEFAULT_INI_TEXT } from './ini.js';
 import { clashProxy, clashProxyFromLink, renderClash } from './clash.js';
 import { surgeName, surgeProxyLine, surgeLinkLine, renderSurge } from './surge.js';
-import { singboxOutbound, singboxOutboundFromLink, renderSingbox } from './singbox.js';
+import { singboxOutbound, singboxOutboundFromLink, renderSingbox, legacyDnsFor } from './singbox.js';
 import { groupInterval } from '../allocator.js';
 
 export const FORMATS = ['mixed', 'base64', 'clash', 'singbox', 'surge'];
@@ -132,7 +132,7 @@ export function renderSubscription({ format, nodes, ctx, ini, rules }) {
       if (o) { outbounds.push(o); sbInfo.push({ name: names[i], cf: e.cf }); } else warnings.push(`sing-box 不支持的节点已跳过：${names[i]}`);
     });
     const groups = withTol(resolveGroups(model, outbounds.map((o) => o.tag), warnings, { hide: hideOf(sbInfo) }));
-    body = renderSingbox({ outbounds, groups, rules: block, intervalOf });
+    body = renderSingbox({ outbounds, groups, rules: block, intervalOf, legacyDns: legacyDnsFor(ctx.userAgent) });
   }
   if (warnings.length) extraHeaders['X-NT-Render-Warnings'] = String(warnings.length);
   return { body, contentType: CONTENT_TYPES[fmt] || 'text/plain; charset=utf-8', extraHeaders, warnings };
