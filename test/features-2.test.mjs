@@ -126,7 +126,7 @@ test('家宽：解析 VPN Gate 列表——只留 TCP、去掉自营机房、证
   assert.deepEqual(h.groups[0].proxies.slice(0, 2), ['🏠 家宽自动', '🏠 家宽节点'], '默认走家宽');
   const auto = h.groups.find((g) => g.name === '🏠 家宽自动');
   assert.equal(auto.type, 'url-test', '自动选最快的');
-  assert.equal(auto.timeout, 10000);
+  assert.equal(auto.timeout, 15000);
 });
 
 test('家宽订阅：开启后 &target=home 出 Clash（OpenVPN 节点 + 家宽组）；没开 403；列表没准备好 503；Cron 到点刷新', async () => {

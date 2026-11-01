@@ -155,8 +155,9 @@ export function addHomeToClash(home, proxies, groups) {
   const names = ovpn.map((o) => o.name);
   const homeGroups = [
     // 自动选最快的可用节点（故障转移组只挑排在最前面的可用节点，实测会选中 5 秒的而不是 0.5 秒的）；
-    // OpenVPN 要多绕一圈握手，测速时限放宽到 10 秒，慢但能用的节点也算进去
-    { name: AUTO, type: 'url-test', proxies: names, url: 'http://www.gstatic.com/generate_204', interval: 300, tolerance: 100, timeout: 10000 },
+    // OpenVPN 握手在客户端和住宅宽带之间来回十几次、每次都走整条链路：实测建隧道要 5~9 秒（建好后延迟约 600ms），
+    // 客户端默认 5 秒的测速时限会把能用的节点全判成超时，放宽到 15 秒
+    { name: AUTO, type: 'url-test', proxies: names, url: 'http://www.gstatic.com/generate_204', interval: 300, tolerance: 100, timeout: 15000 },
     { name: PICK, type: 'select', proxies: names },
     // 前置自动选延迟最低的可用节点：手动选择组默认用第一个，那个节点不通时所有家宽节点都会超时
     { name: FRONT, type: 'url-test', proxies: front, url: 'http://www.gstatic.com/generate_204', interval: 300, tolerance: 50 },
