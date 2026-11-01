@@ -1,6 +1,17 @@
 // 设置的单一事实来源：默认值、合并、清洗、公开视图（脱敏）、从 edgetunnel 旧配置迁移。
 // 全部为纯函数，不碰 KV/网络，便于单测。存储层见 store.js。
 import { regexRisk } from '../lib/pool-parse.js';
+import { parseDuration, DEFAULT_LADDER, RULES as AUTOBAN_RULES } from './autoban.js';
+
+/** 自动封禁各规则的默认阈值（count 次 / 个，hours 小时内） */
+const AUTOBAN_DEFAULTS = {
+  overLimit: { enabled: true, count: 3, hours: 24 },
+  conns: { enabled: false, count: 30000, hours: 24 },
+  ips: { enabled: false, count: 10, hours: 24 },
+  colos: { enabled: false, count: 4, hours: 6 },
+  subFetch: { enabled: false, count: 100, hours: 24 },
+  subIps: { enabled: false, count: 6, hours: 24 },
+};
 
 export const SCHEMA_VERSION = 5;
 
@@ -143,7 +154,11 @@ export function defaultSettings() {
       dailyBudget: 330000, // 付费账号的每日预算（10M/月 ÷ 30），用于分配权重；账号自己填了每日额度时以账号为准
     },
     // 多用户专属链接（见 control/users.js）：开启后后台多一个「用户」页
-    users: { enabled: false, defaultLimit: 2, banMessage: '此链接已停用，请联系管理员' },
+    users: {
+      enabled: false, defaultLimit: 2, banMessage: '此链接已停用，请联系管理员',
+      // 自动封禁（可选）：任一条开启的规则触发就按阶梯封禁；统计周期过了违规次数清零（见 control/autoban.js）
+      autoBan: { enabled: false, checkMinutes: 10, resetHours: 168, ladder: DEFAULT_LADDER.slice(), ...JSON.parse(JSON.stringify(AUTOBAN_DEFAULTS)) },
+    },
     ui: { simpleMode: false },
   };
 }
@@ -349,6 +364,20 @@ export function normalizeSettings(raw) {
   us.defaultLimit = int(us.defaultLimit, 2, 0, 50); // 0 = 不限
   // 被封禁用户拉订阅时看到的提示（占位节点的名字 / 浏览器提示页的标题）
   us.banMessage = String(us.banMessage ?? '').replace(/[\x00-\x1f\x7f<>]/g, '').trim().slice(0, 60) || '此链接已停用，请联系管理员';
+  const ab = us.autoBan;
+  ab.enabled = bool(ab.enabled, false);
+  // 检查间隔取 5 的倍数（Cron 每 1 或 5 分钟触发一次，按"分钟数能整除"判断该不该检查）
+  ab.checkMinutes = Math.max(5, Math.round(int(ab.checkMinutes, 10, 5, 1440) / 5) * 5);
+  ab.resetHours = int(ab.resetHours, 168, 1, 8760);
+  ab.ladder = strList(ab.ladder).filter((x) => parseDuration(x) !== null).slice(0, 10);
+  if (!ab.ladder.length) ab.ladder = DEFAULT_LADDER.slice();
+  for (const k of Object.keys(AUTOBAN_RULES)) {
+    const r = ab[k] && typeof ab[k] === 'object' ? ab[k] : (ab[k] = {});
+    const def = AUTOBAN_DEFAULTS[k];
+    r.enabled = bool(r.enabled, def.enabled);
+    r.count = int(r.count, def.count, 1, 1e9);
+    r.hours = int(r.hours, def.hours, 1, 720);
+  }
 
   s.ui.simpleMode = bool(s.ui.simpleMode, false);
   return s;

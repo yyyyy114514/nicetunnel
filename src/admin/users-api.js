@@ -2,8 +2,9 @@
 import { jsonResponse, errorResponse } from '../control/auth.js';
 import {
   MU_KEYS, MAX_BATCH, getUsers, saveUsers, makeUsers, getMuSecret, userSubUrl, effectiveLimit,
-  cfAccountIdOf, setupAccount, accountReady, syncUsers, userStats, normalizeUser,
+  cfAccountIdOf, setupAccount, accountReady, syncUsers, userStats, normalizeUser, runAutoBan,
 } from '../control/users.js';
+import { banActive, banUser, unbanUser, banNotice } from '../control/autoban.js';
 import { redactSecrets } from '../control/notify.js';
 
 const PAGE_MAX = 200;
@@ -21,7 +22,11 @@ export function createUsersRoutes(readJson) {
   async function withLinks(c, ctx, list) {
     const secret = await getMuSecret(c.store);
     const o = origin(ctx);
-    return Promise.all(list.map(async (u) => ({ ...u, effLimit: effectiveLimit(u, c.settings), sub: await userSubUrl(secret, o, u.id) })));
+    return Promise.all(list.map(async (u) => ({
+      ...u, effLimit: effectiveLimit(u, c.settings), sub: await userSubUrl(secret, o, u.id),
+      // 封禁是否还在生效（到期的显示"已到期"）、被封用户看到的提示
+      banActive: banActive(u, c.now), banText: u.banned ? banNotice(c.settings.users?.banMessage, u, c.now) : '',
+    })));
   }
 
   async function accountsView(c) {
@@ -58,7 +63,9 @@ export function createUsersRoutes(readJson) {
       const page = filtered.slice().reverse().slice(offset, offset + limit); // 新建的在前
       return jsonResponse({
         ok: true, enabled: !!c.settings.users?.enabled, defaultLimit: c.settings.users?.defaultLimit ?? 2,
-        total: all.length, matched: filtered.length, banned: all.filter((x) => x.banned).length, offset, limit,
+        total: all.length, matched: filtered.length, banned: all.filter((x) => banActive(x, c.now)).length, offset, limit,
+        // 订阅类自动封禁规则要用主站的 Analytics Engine
+        mainAe: !!(ctx.env && ctx.env.NT_AE),
         users: await withLinks(c, ctx, page), ...(await accountsView(c)),
       });
     },
@@ -85,8 +92,11 @@ export function createUsersRoutes(readJson) {
       const next = all.map((u) => {
         if (!ids.has(u.id)) return u;
         n++;
-        const v = { ...u };
-        if (typeof body.banned === 'boolean') v.banned = body.banned;
+        let v = { ...u };
+        // 封禁：banHours 留空 / 0 = 永久；解封时记下解封时间（自动封禁只算之后的数据），resetVio=true 违规次数清零
+        if (body.banned === true) v = banUser(v, { now: c.now, seconds: Math.max(0, Number(body.banHours) || 0) * 3600, reason: '手动封禁' });
+        else if (body.banned === false) v = unbanUser(v, { now: c.now, resetVio: !!body.resetVio });
+        else if (body.resetVio === true) v = { ...v, vio: 0, vioSince: 0 };
         if ('limit' in body) v.limit = body.limit;
         if (typeof body.name === 'string' && ids.size === 1) v.name = body.name;
         return normalizeUser(v) || u;
@@ -94,6 +104,14 @@ export function createUsersRoutes(readJson) {
       await saveUsers(c.store, next);
       const push = await pushNow(c);
       return jsonResponse({ ok: true, updated: n, push });
+    },
+    /** 立即执行一次自动封禁检查（不管开关和检查间隔），有人被封就下发 */
+    'POST users/autoban/run': async (ctx, c) => {
+      const off = needOn(c); if (off) return off;
+      const [accounts, usage] = await Promise.all([c.store.getAccounts(), c.store.getUsage()]);
+      const r = await runAutoBan({ store: c.store, settings: c.settings, accounts, usage, fetchFn: c.fetchFn, now: c.now, force: true, mainAe: !!(ctx.env && ctx.env.NT_AE) });
+      const push = r.banned.length ? await pushNow(c) : null;
+      return jsonResponse({ ok: true, ...r, push });
     },
     'POST users/delete': async (ctx, c) => {
       const { body, error } = await readJson(ctx.request); if (error) return error;

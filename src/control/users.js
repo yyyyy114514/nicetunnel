@@ -14,6 +14,7 @@ import {
 import { authAttempts } from './usage.js';
 import { hash32 } from '../lib/rand.js';
 import { safeEqual } from './auth.js';
+import { banActive, banUser, evaluateRules, aggregateRows, ruleWindows, cutoffOf, nodeAggSql, subAggSql, hitReason } from './autoban.js';
 
 // sync 与下发状态合成一个键：每次变化主站只写一次 KV
 export const MU_KEYS = { users: 'nt.users', secret: 'nt.mu.secret', accounts: 'nt.mu.accounts', sync: MU_STATE_KEY };
@@ -32,7 +33,13 @@ const cleanLimit = (v) => (v === null || v === undefined || v === '' ? null : Ma
 
 export function normalizeUser(u) {
   if (!u || typeof u !== 'object' || !/^[a-z0-9]{8}$/.test(String(u.id || ''))) return null;
-  return { id: u.id, name: cleanName(u.name), limit: cleanLimit(u.limit), banned: !!u.banned, createdAt: Number(u.createdAt) || 0 };
+  const n = (x) => Math.max(0, Math.round(Number(x) || 0));
+  return {
+    id: u.id, name: cleanName(u.name), limit: cleanLimit(u.limit), banned: !!u.banned, createdAt: n(u.createdAt),
+    // 封禁时长（0 = 永久）与原因；违规次数和统计起点（阶梯处罚用）；上次封禁 / 解封时间（规则只算之后的数据）
+    bannedUntil: n(u.bannedUntil), banAuto: !!u.banAuto, banReason: String(u.banReason || '').replace(/[\x00-\x1f\x7f<>]/g, '').slice(0, 80),
+    vio: n(u.vio), vioSince: n(u.vioSince), banAt: n(u.banAt), unbanAt: n(u.unbanAt),
+  };
 }
 export const normalizeUsers = (list) => {
   const seen = new Set();
@@ -86,8 +93,10 @@ export async function verifySubToken({ store, settings, token }) {
   if (!safeEqual(t.sig, await userSubSig(secret, t.id))) return { ok: false, code: 'bad_token' };
   const user = (await getUsers(store)).find((u) => u.id === t.id);
   if (!user) return { ok: false, code: 'bad_token' };
-  if (user.banned) return { ok: false, code: 'banned' };
-  return { ok: true, user, uuid: await userUuid(await nodeKeyOf(secret), t.id), token: String(token) };
+  const nodeKey = await nodeKeyOf(secret);
+  // 封禁到期自动失效
+  if (banActive(user)) return { ok: false, code: 'banned', user, nodeKey };
+  return { ok: true, user, uuid: await userUuid(nodeKey, t.id), token: String(token), nodeKey };
 }
 
 // ---------------------------------------------------------------------------
@@ -309,10 +318,10 @@ export function mergeOnline(rowsList) {
  * 都会落在 5 分钟窗口的起点，顺序会来回跳）。
  * @returns {Record<string,string[]>}
  */
-export function computeOver(users, settings, byUser, prevOver = {}) {
+export function computeOver(users, settings, byUser, prevOver = {}, now = Date.now()) {
   const over = {};
   for (const u of users) {
-    if (u.banned) continue;
+    if (banActive(u, now)) continue;
     const limit = effectiveLimit(u, settings);
     const list = byUser.get(u.id);
     if (!limit || !list || list.length <= limit) continue;
@@ -329,9 +338,10 @@ export function computeOver(users, settings, byUser, prevOver = {}) {
  * key 是由主密钥派生的节点密钥（HMAC(主密钥, "node")），只能算用户 UUID 和 IP 标记；
  * 订阅令牌用主密钥签，主密钥只在主站 KV —— 某个节点账号的 KV 泄露也伪造不了订阅链接。
  */
-export function buildState({ nodeKey, users, settings, over }) {
+export function buildState({ nodeKey, users, settings, over, now = Date.now() }) {
   const on = !!settings?.users?.enabled;
-  return { v: 2, on, key: nodeKey, ids: on ? users.filter((u) => !u.banned).map((u) => u.id).sort() : [], over: on ? over || {} : {} };
+  // 封禁到期的用户自动回到名单里（名单变化会立即下发）
+  return { v: 2, on, key: nodeKey, ids: on ? users.filter((u) => !banActive(u, now)).map((u) => u.id).sort() : [], over: on ? over || {} : {} };
 }
 
 /** 只有超限名单变化时，最快多久下发一次（可用名单 / 开关变化总是立即下发） */
@@ -368,21 +378,26 @@ export async function syncUsers({ store, settings, accounts, usage, fetchFn = gl
     if (res.some((r) => r.ok)) {
       const byUser = mergeOnline(res.filter((r) => r.ok).map((r) => r.rows));
       onlineCount = [...byUser.values()].reduce((n, l) => n + l.length, 0);
-      over = computeOver(users, settings, byUser, last.over);
+      over = computeOver(users, settings, byUser, last.over, now);
     }
   }
   // 写入节流：可用名单 / 开关 / 节点密钥变了立即下发（封禁、删除要马上生效）；只有超限名单变了，
   // 最快 5 分钟一次，且每天有上限——用户在上限附近进进出出时名单可能每分钟都变，不节流会写满 KV 的每日额度
-  let state = buildState({ nodeKey, users, settings, over });
+  let state = buildState({ nodeKey, users, settings, over, now });
   const urgent = !last.sig || state.on !== last.on || state.key !== last.key || !sameList(state.ids, last.ids);
   const overChanged = JSON.stringify(state.over) !== JSON.stringify(last.over || {});
   let overAt = last.overAt || 0;
   if (!urgent && overChanged) {
     const budgetLeft = writes < OVER_PUSH_DAILY_MAX && targets.every((a) => (pushN[a.id] || 0) < OVER_PUSH_DAILY_MAX);
-    if (now - overAt < OVER_PUSH_MS || !budgetLeft) state = buildState({ nodeKey, users, settings, over: last.over || {} });
+    if (now - overAt < OVER_PUSH_MS || !budgetLeft) state = buildState({ nodeKey, users, settings, over: last.over || {}, now });
     else overAt = now;
   } else if (overChanged) overAt = now;
   over = state.over;
+  // 超限记录（自动封禁"超过并行上限"规则用）：下发的超限名单里新出现的用户记一次；只留统计窗口内的、每人最多 50 条
+  const keepMs = Math.max(settings?.users?.autoBan?.overLimit?.hours || 24, settings?.users?.autoBan?.resetHours || 168) * 3600e3;
+  const overHits = {};
+  for (const [id, list] of Object.entries(last.overHits || {})) { const l = (list || []).filter((t) => now - t < keepMs).slice(-50); if (l.length) overHits[id] = l; }
+  for (const id of Object.keys(state.over)) if (!(last.over || {})[id]) (overHits[id] ||= []).push(now);
   const sig = stateSig(state);
   const pushed = { ...(last.pushed || {}) };
   const done = [];
@@ -395,8 +410,76 @@ export async function syncUsers({ store, settings, accounts, usage, fetchFn = gl
   // 主站只写一个键（状态 + 同步记录）。只有错误信息变了：最快 30 分钟记一次
   const errChanged = JSON.stringify(errors) !== JSON.stringify(last.errors || {});
   const changed = sig !== last.sig || done.length > 0 || (errChanged && now - (last.at || 0) >= ERROR_WRITE_MS);
-  if (changed && store.kvBound) await store.putJson(MU_KEYS.sync, { ...state, sig, at: now, overAt, pushed, errors, day, writes: writes + 1, pushN }, 10e3);
+  if (changed && store.kvBound) await store.putJson(MU_KEYS.sync, { ...state, sig, at: now, overAt, pushed, errors, day, writes: writes + 1, pushN, overHits }, 10e3);
   return { changed, pushed: done, errors, online: onlineCount, over: Object.keys(over).length };
+}
+
+/** 每次检查最多给几个"刚封禁 / 解封过"的用户单独查（他们只能算之后的数据） */
+const AUTOBAN_RECENT_MAX = 3;
+
+/** 主站账号（role=main）：主站自己的 Analytics Engine 在这个账号下 */
+const mainAccountOf = (accounts, usage) => (accounts || []).find((a) => a.role === 'main' && authAttempts(a.auth || {}).length && cfAccountIdOf(a, usage)) || null;
+
+/**
+ * 按窗口查一组账号，合并成 窗口小时数 → 用户 → 聚合。刚封禁 / 解封过的用户只算之后的数据：单独查（每次最多几个），
+ * 超出的这次先不判断。
+ */
+async function collectAgg({ windows, accounts, usage, users, fetchFn, now, sqlOf, errors }) {
+  const out = new Map();
+  for (const h of windows) {
+    const since = now - h * 3600e3;
+    const map = new Map();
+    const res = await Promise.all(accounts.map((a) => aeQuery(fetchFn, a, cfAccountIdOf(a, usage), sqlOf(since / 1000)).catch((e) => ({ ok: false, error: String(e?.message || e) }))));
+    res.forEach((r, i) => { if (r.ok) aggregateRows(map, r.rows); else errors[accounts[i].id] = 'AE：' + r.error; });
+    const recent = users.filter((u) => cutoffOf(u, since) > since);
+    for (const u of recent) map.delete(u.id);
+    for (const u of recent.slice(0, AUTOBAN_RECENT_MAX)) {
+      const rs = await Promise.all(accounts.map((a) => aeQuery(fetchFn, a, cfAccountIdOf(a, usage), sqlOf(cutoffOf(u, since) / 1000, u.id)).catch(() => ({ ok: false }))));
+      for (const r of rs) if (r.ok) aggregateRows(map, r.rows);
+    }
+    out.set(h, map);
+  }
+  return out;
+}
+
+/**
+ * 自动封禁检查一次：查各规则需要的数据 → 判断 → 触发的用户按阶梯封禁（写用户名单）。
+ * 调用方随后应 syncUsers({query:false}) 把新名单下发（封禁要马上生效）。
+ * @returns {Promise<{ran:boolean, banned:{id:string, reason:string, until:number}[], errors:Record<string,string>, notes:string[]}>}
+ */
+export async function runAutoBan({ store, settings, accounts, usage, fetchFn = globalThis.fetch, now = Date.now(), force = false, mainAe = false }) {
+  const cfg = settings?.users?.autoBan;
+  const result = { ran: false, banned: [], errors: {}, notes: [] };
+  if (!settings?.users?.enabled || (!cfg?.enabled && !force)) return result;
+  const [users, metas, rec] = await Promise.all([getUsers(store), store.getJson(MU_KEYS.accounts, 30e3), store.getJson(MU_KEYS.sync, 10e3)]);
+  const meta = metas || {};
+  const targets = (accounts || []).filter((a) => meta[a.id]?.nsId && !meta[a.id]?.aeMissing && cfAccountIdOf(a, usage) && a.enabled !== false).slice(0, MAX_SYNC_ACCOUNTS);
+  const nodeWindows = ruleWindows(cfg, 'node');
+  const mainWindows = ruleWindows(cfg, 'main');
+  const node = nodeWindows.length && targets.length
+    ? await collectAgg({ windows: nodeWindows, accounts: targets, usage, users, fetchFn, now, sqlOf: (s, only) => nodeAggSql(MU_DATASET, s, only), errors: result.errors })
+    : new Map();
+  let main = new Map();
+  if (mainWindows.length) {
+    const ma = mainAccountOf(accounts, usage);
+    if (!mainAe) result.notes.push('订阅相关规则没有数据：主站没有绑定 Analytics Engine（NT_AE）');
+    else if (!ma) result.notes.push('订阅相关规则没有数据：没有可用的主号凭据（「额度」页填主号 Token）');
+    else main = await collectAgg({ windows: mainWindows, accounts: [ma], usage, users, fetchFn, now, sqlOf: (s, only) => subAggSql(MU_DATASET, s, only), errors: result.errors });
+  }
+  result.ran = true;
+  const hits = evaluateRules({ users, cfg, node, main, overHits: rec?.overHits || {}, now });
+  if (!hits.length) return result;
+  const byId = new Map(hits.map((h) => [h.id, h]));
+  const next = users.map((u) => {
+    const h = byId.get(u.id);
+    // 两分钟内刚封过的跳过（两个实例同时检查时不重复累计违规次数）
+    if (!h || now - (u.banAt || 0) < 120e3) return u;
+    const v = banUser(u, { now, auto: true, reason: hitReason(h), cfg });
+    result.banned.push({ id: u.id, reason: v.banReason, until: v.bannedUntil });
+    return v;
+  });
+  if (result.banned.length) await saveUsers(store, next);
+  return result;
 }
 
 /** 后台统计：每个用户最近 5 分钟在线 IP 数、最近 24 小时连接数（每个账号 2 次 AE 查询） */

@@ -16,6 +16,8 @@ import { trackRequest } from './logs.js';
 import { verifySubToken, readyAccountSet } from './users.js';
 import { landingHtml } from './sub/landing.js';
 import { noticeConfig, noticeHtml } from './sub/notice.js';
+import { banNotice } from './autoban.js';
+import { ipTag } from '../lib/mu.js';
 import { homeClientSupport } from './homefeed.js';
 import { buildSubscription, pollAndPersist } from './pipeline.js';
 import { refreshRulesStep, getRulesStatus, fetchAndSaveIni } from './rulesfeed.js';
@@ -167,8 +169,12 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       if (!v.ok && v.code === 'banned') {
         // 被封禁：浏览器给提示页；客户端给一份只有"提示语占位节点"的配置（规则全直连），用户在节点列表里就能看到原因。
         // 只回 403 的话客户端一般只显示"更新失败"
-        const msg = stored.users?.banMessage || '此链接已停用，请联系管理员';
-        const noStore = { 'Cache-Control': 'no-store', 'X-NT-Status': 'banned' };
+        // 被封用户也要限速：否则恶意死循环拉订阅能把主站的每日请求额度刷完
+        if (rateLimited(ip, stored.sub.rateLimitPerMinute, now)) return new Response('请求过于频繁，请稍后再试', { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain; charset=utf-8' } });
+        const msg = banNotice(stored.users?.banMessage || '此链接已停用，请联系管理员', v.user, now);
+        // 客户端多久再来拉：临时封禁按剩余时长（1~24 小时），永久封禁 24 小时
+        const left = v.user.bannedUntil ? Math.ceil((v.user.bannedUntil - now) / 3600e3) : 24;
+        const noStore = { 'Cache-Control': 'no-store', 'X-NT-Status': 'banned', 'Profile-Update-Interval': String(Math.min(24, Math.max(1, left))) };
         if (browserUa && [...url.searchParams.keys()].every((k) => k === 'u')) {
           return new Response(noticeHtml({ siteName: stored.site?.name || 'nicetunnel', message: msg }), { status: 403, headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Robots-Tag': 'noindex', ...noStore } });
         }
@@ -179,6 +185,10 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       }
       if (!v.ok) return camouflage(request, url, env.URL || 'nginx');
       user = { id: v.user.id, uuid: v.uuid, token: v.token };
+      // 主站绑定了 Analytics Engine（NT_AE）时记一条订阅更新（自动封禁的订阅类规则用；不算 Worker 请求、不占 KV）
+      if (env.NT_AE && typeof env.NT_AE.writeDataPoint === 'function') {
+        try { env.NT_AE.writeDataPoint({ indexes: [v.user.id], blobs: [v.user.id, await ipTag(v.nodeKey, ip), request.cf?.colo || '', '1', 'sub'], doubles: [1] }); } catch { /* 超额或未绑定 */ }
+      }
       // 用户在浏览器里打开自己的链接（只带 u 参数）：给落地页（一键导入 / 二维码 / 复制），不给一堆配置文本。
       // 代理客户端的 UA 不是浏览器，或者带了 target 等格式参数时，照常返回订阅
       if (browserUa && [...url.searchParams.keys()].every((k) => k === 'u')) {

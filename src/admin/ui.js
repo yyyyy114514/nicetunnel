@@ -20,7 +20,7 @@ nav button svg{width:17px;height:17px;flex:none;stroke:currentColor;fill:none;st
 nav button:hover{background:var(--soft);color:var(--fg)}
 nav button.on{background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;font-weight:600;box-shadow:0 8px 22px #5b5bf044}
 .side-foot{margin-top:auto;padding:10px;color:var(--mut);font-size:12px;display:flex;align-items:center;justify-content:space-between}
-main{padding:28px clamp(14px,3vw,40px) 80px;max-width:1180px;width:100%}
+main{padding:28px clamp(14px,3vw,40px) 80px;max-width:1180px;width:100%;min-width:0}
 .top{display:flex;align-items:center;gap:12px;margin-bottom:20px}.top h1{margin:0;font-size:22px;letter-spacing:-.2px;flex:1}.top .sub-h{color:var(--mut);font-size:13px}
 .card{background:var(--card);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:var(--r);padding:20px;margin-bottom:16px;box-shadow:var(--sh)}
 .card h2{font-size:14px;font-weight:650;margin:0 0 14px;display:flex;align-items:center;gap:8px;letter-spacing:.2px}.card h2 .sp{flex:1}
@@ -50,6 +50,7 @@ textarea{min-height:112px;resize:vertical}
 .btn:hover{border-color:var(--pri);color:var(--pri)}.btn.p{background:linear-gradient(135deg,var(--pri),var(--pri2));border:0;color:#fff;box-shadow:0 8px 20px #5b5bf044}.btn.p:hover{filter:brightness(1.07);color:#fff}
 .btn.d{color:var(--bad)}.btn.d:hover{border-color:var(--bad);color:var(--bad)}.btn:disabled{opacity:.5;cursor:default}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input.cb{width:16px;height:16px;padding:0;margin:0;flex:none;accent-color:var(--pri);cursor:pointer}
 .tw{overflow-x:auto;margin:0 -4px;padding:0 4px}table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{text-align:left;padding:10px 10px;border-bottom:1px solid var(--line);white-space:nowrap}th{color:var(--mut);font-weight:550;font-size:12px;letter-spacing:.4px}tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--soft)}
 .tag{display:inline-flex;align-items:center;padding:2px 10px;border-radius:999px;font-size:12px;background:var(--soft);color:var(--pri);font-weight:550}
@@ -275,10 +276,20 @@ function clientMain() {
       { t: "界面", f: [
         ['ui.simpleMode', '小白模式（隐藏高级项）', 'bool'],
       ] },
-      { t: "多用户专属链接", d: '开启后左侧多一个「用户」页：批量生成每人一条的订阅链接，可封禁、设置并行客户端数、查看在线和用量。原有的订阅链接不变。节点账号需要 KV 和 Analytics Engine 两个绑定（「用户」页可自动配置）。', f: [
+      { t: "多用户专属链接", d: '开启后左侧多一个「用户」页：批量生成每人一条的订阅链接，可封禁（可设时长）、自动封禁、设置并行客户端数、查看在线和用量。原有的订阅链接不变。相关设置都在「用户」页。', f: [
         ['users.enabled', '开启多用户', 'bool'],
+      ] },
+    ],
+    users: [
+      { t: "基本设置", f: [
         ['users.defaultLimit', '默认并行客户端数（同时在线的不同 IP；0 = 不限）', 'num'],
-        ['users.banMessage', '封禁提示（被封用户的客户端里会出现一个以此为名的节点；浏览器打开显示这句话）', 'text', null, 0, '最多 60 字。被封用户更新订阅后，节点列表里只剩这一条提示，规则全部直连（不会断网）'],
+        ['users.banMessage', '封禁提示', 'text', null, 0, '被封用户的客户端里会出现一个以此为名的节点（后面自动加上解封时间或"永久"），浏览器打开显示这句话；规则全部直连，不会断网。最多 60 字'],
+      ] },
+      { t: "自动封禁", act: [['abRun', '立即检查一次']], out: 'outAb', d: '任一条开启的规则（见下一张卡片）达到阈值就自动封禁，时长按阶梯处罚：统计周期内第 1 次违规封第 1 档，第 2 次封第 2 档……次数超过档数时一直用最后一档。封禁或解封之后，规则只算之后的数据，旧数据不会让人一解封就再被封。检查跟着 Cron 跑，不增加 Worker 请求。', f: [
+        ['users.autoBan.enabled', '开启自动封禁', 'bool'],
+        ['users.autoBan.checkMinutes', '检查间隔（分钟，取 5 的倍数）', 'num'],
+        ['users.autoBan.resetHours', '违规统计周期（小时）：从第一次违规算起，过了这么久违规次数清零', 'num'],
+        ['users.autoBan.ladder', '阶梯处罚（每行或逗号分隔一档；写法 30s / 5m / 24h / 3d / 永久）', 'list'],
       ] },
     ],
   };
@@ -528,57 +539,102 @@ function clientMain() {
       <button class="btn d" id="rs">执行重置</button></div></section><div class="savebar"`);
   }
   // ---------------- 用户（多用户专属链接） ----------------
-  // 数据不在 state 里：进入本页时单独拉 /admin/api/users（分页），在线统计点按钮才查（每个账号 2 次 AE 查询）
+  // 数据不在 state 里：进入本页时单独拉 /admin/api/users（分页），在线统计点按钮才查（每个账号 2 次 AE 查询）。
+  // 卡片顺序：用户列表 → 批量生成 → 设置（基本 / 自动封禁 / 规则，声明式卡片）→ 节点账号配置（一次性的，放最后）
   const U = { q: '', offset: 0, limit: 100, data: null, stats: null, picked: new Set(), made: '' };
   function pgUsers() {
-    return '<div id="usersRoot"><div class="card"><p class="mut">加载中…</p></div></div>';
+    return '<div id="usersRoot"><div class="card"><h2><i></i>用户</h2><p class="mut">加载中…</p></div></div>'
+      + sectionHtml('users').replace('<div class="savebar"', abRulesHtml() + '<div id="usersAcc"></div><div class="savebar"');
   }
-  function usersHtml() {
+  // 自动封禁规则：一行一条（声明式卡片是两列网格，三个字段一组会和下一条规则交错）。输入框沿用 data-p，保存栏照常工作
+  const AB_RULES = [
+    ['overLimit', '超过并行上限', '次', '同步记录', '下发的超限名单里出现一次算一次'],
+    ['conns', '连接数', '次', '节点账号 AE', '≈ 节点 Worker 请求数；刷得特别凶的'],
+    ['ips', '使用的不同 IP 数', '个', '节点账号 AE', '偏多通常说明链接被分享'],
+    ['colos', '连到的不同机房数', '个', '节点账号 AE', '短时间内多个机房 = 多地同时在用'],
+    ['subFetch', '订阅更新次数', '次', '主站 AE（NT_AE）', '频繁拉订阅'],
+    ['subIps', '拉订阅的不同 IP 数', '个', '主站 AE（NT_AE）', '订阅链接外泄'],
+  ];
+  function abRulesHtml() {
+    const ab = S.settings.users?.autoBan || {};
+    const rows = AB_RULES.map(([k, name, unit, src, tip]) => {
+      const r = ab[k] || {};
+      return '<tr><td style="white-space:nowrap"><b>' + h(name) + '</b><div class="mut" style="font-size:12px">' + h(tip) + '</div></td>'
+        + '<td><label class="chk" style="padding:0"><input type="checkbox" data-p="users.autoBan.' + k + '.enabled" data-t="bool" ' + (r.enabled ? 'checked' : '') + '></label></td>'
+        + '<td><div class="row" style="flex-wrap:nowrap;gap:6px"><input type="number" min="1" max="720" data-p="users.autoBan.' + k + '.hours" data-t="num" value="' + h(r.hours ?? '') + '" style="width:84px"><span class="mut">小时内</span></div></td>'
+        + '<td><div class="row" style="flex-wrap:nowrap;gap:6px"><span class="mut">≥</span><input type="number" min="1" data-p="users.autoBan.' + k + '.count" data-t="num" value="' + h(r.count ?? '') + '" style="width:104px"><span class="mut">' + unit + '</span></div></td>'
+        + '<td class="mut" style="white-space:nowrap">' + h(src) + '</td></tr>';
+    }).join('');
+    return '<section class="card"><h2><i></i>自动封禁规则</h2><p class="desc">任一条开启的规则达到阈值就封禁（按上面的阶梯）。节点类规则的数据来自节点账号的 Analytics Engine；订阅类需要主站 Worker 也绑定 Analytics Engine（变量名 NT_AE，数据集 nicetunnel_mu）。改完点底部的保存。</p>'
+      + '<div class="tw"><table><thead><tr><th>规则</th><th>开启</th><th>统计时长</th><th>封禁阈值</th><th>数据来源</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>';
+  }
+  const banCell = (u) => {
+    if (u.banActive) {
+      const until = u.bannedUntil ? fmtT(u.bannedUntil) + ' 解封' : '永久';
+      return '<span class="pill p-exhausted" title="' + h(u.banReason || '') + '">已封禁</span><div class="mut" style="font-size:12px;white-space:nowrap;margin-top:2px">' + h(until) + (u.banAuto ? ' · 自动' : '') + '</div>';
+    }
+    if (u.banned) return '<span class="pill p-stale" title="' + h(u.banReason || '') + '">封禁已到期</span>';
+    return '<span class="pill p-ok">正常</span>';
+  };
+  function usersListHtml() {
     const d = U.data;
-    if (!d) return '<div class="card"><p class="mut">加载中…</p></div>';
+    const rows = d.users.map((u) => {
+      const s = U.stats?.stats?.[u.id];
+      const lim = u.effLimit ? u.effLimit + (u.limit == null ? ' <span class="mut">默认</span>' : '') : '不限';
+      const online = s ? (s.online ? '<b>' + s.online + '</b>' : '0') + (u.effLimit && s.online > u.effLimit ? ' <span class="pill p-exhausted">超限</span>' : '') : '<span class="mut">-</span>';
+      const vio = u.vio ? '<span title="' + h('统计周期从 ' + fmtT(u.vioSince) + ' 起；上次原因：' + (u.banReason || '-')) + '">' + u.vio + ' 次</span>' : '<span class="mut">-</span>';
+      return '<tr><td><input type="checkbox" class="cb" data-upick="' + u.id + '" ' + (U.picked.has(u.id) ? 'checked' : '') + '></td><td class="mono">' + u.id + '</td><td><input data-uname="' + u.id + '" value="' + h(u.name) + '" style="min-width:96px;max-width:150px"></td>'
+        + '<td>' + banCell(u) + '</td><td>' + vio + '</td><td style="white-space:nowrap">' + lim + '</td><td>' + online + '</td><td>' + (s && s.conns != null ? fmtN(s.conns) : '<span class="mut">-</span>') + '</td><td style="white-space:nowrap">' + (s && s.lastSeen ? fmtT(s.lastSeen) : '<span class="mut">-</span>') + '</td>'
+        + '<td><div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-copy="' + h(u.sub) + '" title="' + h(u.sub) + '">复制链接</button><a class="btn sm" href="' + h(u.sub) + '" target="_blank" rel="noopener noreferrer" title="用户在浏览器里打开链接看到的页面：各客户端一键导入、二维码">导入页</a></div></td></tr>';
+    }).join('');
+    const pages = Math.max(1, Math.ceil(d.matched / d.limit));
+    const page = Math.floor(d.offset / d.limit) + 1;
+    const statsNote = U.stats ? '统计范围：' + U.stats.accounts + ' 个账号' + (Object.keys(U.stats.errors || {}).length ? '，' + Object.keys(U.stats.errors).length + ' 个查询失败：' + h(Object.values(U.stats.errors)[0]) : '') : '点「刷新在线」查询（每个已配置账号 2 次 Analytics Engine 查询）';
+    const allOn = d.users.length && d.users.every((u) => U.picked.has(u.id));
+    const durs = [['0', '永久'], ['1', '1 小时'], ['24', '1 天'], ['72', '3 天'], ['168', '7 天'], ['720', '30 天']];
+    return '<div class="card"><h2><i></i>用户（' + d.total + (d.banned ? '，封禁中 ' + d.banned : '') + '）<span class="sp"></span><input id="uQ" value="' + h(U.q) + '" placeholder="搜索 ID / 名称" style="width:170px"><button class="btn sm" id="uSearch">搜索</button><button class="btn sm" id="uStats">刷新在线</button></h2>'
+      + '<div class="row" style="gap:8px;margin-bottom:12px">'
+      + '<label class="row" style="gap:6px;cursor:pointer;flex-wrap:nowrap;white-space:nowrap"><input type="checkbox" class="cb" id="uPickAll" ' + (allOn ? 'checked' : '') + '>全选本页</label><span class="mut" style="white-space:nowrap">已选 ' + U.picked.size + ' 个</span><span class="sp"></span>'
+      + '<span class="row" style="gap:6px;flex-wrap:nowrap"><select id="uBanDur" style="width:auto" title="封禁时长">' + durs.map(([v, n]) => '<option value="' + v + '">' + n + '</option>').join('') + '</select><button class="btn sm" id="uBan">封禁</button><button class="btn sm" id="uUnban">解封</button><button class="btn sm" id="uResetVio" title="违规次数清零（自动封禁的阶梯从第 1 档重新算）">清零违规</button></span>'
+      + '<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="uSetLimit" type="number" min="0" max="50" placeholder="并行数" style="width:86px"><button class="btn sm" id="uApplyLimit">设并行</button><button class="btn sm" id="uDefLimit">恢复默认</button></span>'
+      + '<span class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" id="uCopySel">复制链接</button><button class="btn sm d" id="uDel">删除</button></span></div>'
+      + '<div class="tw"><table><thead><tr><th></th><th>ID</th><th>名称</th><th>状态</th><th title="统计周期内的违规次数（自动封禁阶梯处罚用）">违规</th><th>并行上限</th><th title="最近 5 分钟有连接的不同 IP 数">在线 IP</th><th>24 小时连接</th><th>最后在线</th><th>订阅链接</th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="mut">' + (d.total ? '没有匹配的用户' : '还没有用户：在下面「批量生成」') + '</td></tr>') + '</tbody></table></div>'
+      + '<div class="row" style="margin-top:10px;gap:8px"><span class="mut">' + statsNote + '</span><span class="sp"></span><button class="btn sm" id="uPrev" ' + (page <= 1 ? 'disabled' : '') + '>上一页</button><span class="mut">' + page + ' / ' + pages + '</span><button class="btn sm" id="uNext" ' + (page >= pages ? 'disabled' : '') + '>下一页</button></div>'
+      + '<p class="mut" style="margin:10px 0 0">并行上限按"同时在线的不同 IP"计（IPv6 按 /64）：超过后，先连上的设备保留，多出来的新连接被拒绝。同一台设备同时有 IPv4 和 IPv6 会算 2 个，手机切换网络时旧 IP 约 5 分钟后释放，所以一个人建议设 2。封禁默认永久，可以在左边选时长；到期自动解封。</p></div>'
+      + '<div class="card"><h2><i></i>批量生成</h2>'
+      + '<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));align-items:end">'
+      + '<div class="f"><label>数量（1~500）</label><input id="uCount" type="number" value="10" min="1" max="500"></div>'
+      + '<div class="f"><label>名称前缀（可空）</label><input id="uPrefix" placeholder="例如 客户A-"></div>'
+      + '<div class="f"><label>并行上限（0 = 不限）</label><input id="uLimit" type="number" min="0" max="50" placeholder="留空 = 默认 ' + d.defaultLimit + '"></div>'
+      + '<div class="f"><button class="btn p" id="uCreate">生成</button></div></div>'
+      + (U.made ? '<div class="f" style="margin-top:12px"><label>新生成的订阅链接（每行一个）</label><textarea class="mono" readonly style="min-height:120px">' + h(U.made) + '</textarea><div><button class="btn sm" data-copy="' + h(U.made) + '">全部复制</button></div></div>' : '')
+      + '<p class="mut" style="margin:12px 0 0">链接永久有效。每条链接对应一个用户：节点用他自己的凭据，封禁或删除后约 1~2 分钟内到达各节点。原有的订阅链接不受影响。</p></div>';
+  }
+  function usersAccHtml() {
+    const d = U.data;
     const acc = d.accounts.map((a) => {
       const m = a.meta || {};
       const st = m.blocked ? '<span class="pill p-exhausted">项目已被封禁</span>'
         : a.ready ? (a.pushed ? '<span class="pill p-ok">就绪</span>' : '<span class="pill p-low">已绑定，待下发</span>')
         : m.nsId && m.bound ? '<span class="pill p-low">已绑定，待重新部署</span>'
         : m.nsId ? '<span class="pill p-low">缺绑定</span>' : '<span class="pill p-stale">未配置</span>';
-      const aeNote = m.aeMissing ? ' <span class="pill p-low" title="' + h('这个账号不能用 Analytics Engine（' + (m.aeErr || '未开通或 Token 缺 Account Analytics: Read') + '）：封禁照常生效，在线统计和并行限制对它不生效') + '">无在线统计</span>' : '';
-      const err = (m.err || a.error) ? '<div class="mut" style="white-space:normal;color:var(--bad)">' + h(m.err || a.error) + '</div>' : '';
+      const aeNote = m.aeMissing ? ' <span class="pill p-low" title="' + h('这个账号不能用 Analytics Engine（' + (m.aeErr || '未开通或 Token 缺 Account Analytics: Read') + '）：封禁照常生效，在线统计、并行限制和节点类自动封禁规则对它不生效') + '">无在线统计</span>' : '';
+      const err = (m.err || a.error) ? '<div class="mut" style="white-space:normal;color:var(--bad);margin-top:4px">' + h(m.err || a.error) + '</div>' : '';
       // 没自动绑定上、或绑定上了但重新部署没成功：都可以手动完成后勾选
-      const manual = m.nsId && !m.blocked && !(m.bound && m.redeployed) ? '<label class="chk" style="margin-left:6px"><input type="checkbox" data-mbound="' + h(a.id) + '" ' + (m.manualBound ? 'checked' : '') + '> ' + (m.bound ? '已手动重新部署' : '已手动绑定并部署') + '</label>' : '';
-      return '<tr><td>' + h(a.name) + (a.enabled ? '' : ' <span class="tag">未启用</span>') + '</td><td class="mono">' + h(a.cfId ? a.cfId.slice(0, 8) + '…' : '未知') + '</td><td style="white-space:normal;min-width:220px">' + st + (m.project ? ' <span class="mut">Pages：' + h(m.project) + '</span>' : '') + aeNote + manual + err + '</td>'
-        + '<td><button class="btn sm" data-setup="' + h(a.id) + '">' + (a.ready ? '重新配置' : '自动配置') + '</button> <button class="btn sm" data-msetup-reset="' + h(a.id) + '">重置</button></td></tr>';
+      const manual = m.nsId && !m.blocked && !(m.bound && m.redeployed) ? '<label class="row" style="gap:6px;cursor:pointer;margin-top:4px;flex-wrap:nowrap"><input type="checkbox" class="cb" data-mbound="' + h(a.id) + '" ' + (m.manualBound ? 'checked' : '') + '>' + (m.bound ? '已手动重新部署' : '已手动绑定并部署') + '</label>' : '';
+      return '<tr><td style="white-space:nowrap">' + h(a.name) + (a.enabled ? '' : ' <span class="tag">未启用</span>') + '</td><td class="mono">' + h(a.cfId ? a.cfId.slice(0, 8) + '…' : '未知') + '</td><td style="white-space:normal;min-width:240px">' + st + (m.project ? ' <span class="mut">Pages：' + h(m.project) + '</span>' : '') + aeNote + manual + err + '</td>'
+        + '<td><div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-setup="' + h(a.id) + '">' + (a.ready ? '重新配置' : '自动配置') + '</button><button class="btn sm" data-msetup-reset="' + h(a.id) + '">重置</button></div></td></tr>';
     }).join('');
     const readyN = d.accounts.filter((a) => a.ready).length;
-    const rows = d.users.map((u) => {
-      const s = U.stats?.stats?.[u.id];
-      const lim = u.effLimit ? u.effLimit + (u.limit == null ? '<span class="mut">（默认）</span>' : '') : '不限';
-      const online = s ? (s.online ? '<b>' + s.online + '</b>' : '0') + (u.effLimit && s.online > u.effLimit ? ' <span class="pill p-exhausted">超限</span>' : '') : '<span class="mut">-</span>';
-      return '<tr><td><input type="checkbox" data-upick="' + u.id + '" ' + (U.picked.has(u.id) ? 'checked' : '') + '></td><td class="mono">' + u.id + '</td><td><input data-uname="' + u.id + '" value="' + h(u.name) + '" style="min-width:90px"></td>'
-        + '<td>' + (u.banned ? '<span class="pill p-exhausted">已封禁</span>' : '<span class="pill p-ok">正常</span>') + '</td><td>' + lim + '</td><td>' + online + '</td><td>' + (s && s.conns != null ? fmtN(s.conns) : '<span class="mut">-</span>') + '</td><td>' + (s && s.lastSeen ? fmtT(s.lastSeen) : '<span class="mut">-</span>') + '</td>'
-        + '<td><div class="row" style="flex-wrap:nowrap;gap:4px"><input class="mono" readonly value="' + h(u.sub) + '" style="min-width:160px"><button class="btn sm" data-copy="' + h(u.sub) + '">复制</button><a class="btn sm" href="' + h(u.sub) + '" target="_blank" rel="noopener noreferrer" title="用户在浏览器里打开链接看到的页面：各客户端一键导入、二维码">导入页</a></div></td></tr>';
-    }).join('');
-    const pages = Math.max(1, Math.ceil(d.matched / d.limit));
-    const page = Math.floor(d.offset / d.limit) + 1;
-    const statsNote = U.stats ? '统计范围：' + U.stats.accounts + ' 个账号' + (Object.keys(U.stats.errors || {}).length ? '，' + Object.keys(U.stats.errors).length + ' 个查询失败：' + h(Object.values(U.stats.errors)[0]) : '') : '点「刷新在线」查询（每个已配置账号 2 次 Analytics Engine 查询）';
     return '<div class="card"><h2><i></i>节点账号配置<span class="sp"></span><button class="btn sm" id="uSync">立即同步</button></h2>'
-      + '<p class="mut" style="margin:0 0 10px">每个节点账号要有 KV 绑定 <code>NT_MU</code>（命名空间 nicetunnel-mu）和 Analytics Engine 绑定 <code>NT_AE</code>（数据集 nicetunnel_mu），加完重新部署一次。「自动配置」用账号的 Token 完成这些，Token 需要 <b>Workers KV Storage: Edit</b>、<b>Cloudflare Pages: Edit</b>、<b>Account Analytics: Read</b> 权限。自动配置失败时按上面的名字在 Pages 项目「设置 → 绑定」里手动加，再勾「已手动绑定」。'
-      + '主站 Worker 建议再加一个每分钟的 Cron 触发器 <code>* * * * *</code>（保留原来的 <code>*/5 * * * *</code>）。封禁约 1~2 分钟生效；并行超限约 2~7 分钟（超限名单最快 5 分钟下发一次，省 KV 写入额度）。不加触发器则最慢 5 分钟同步一次。原来的共享订阅仍然有效，不受这里的封禁和并行限制。</p>'
+      + '<ol class="mut" style="margin:0 0 12px;padding-left:20px;line-height:1.8">'
+      + '<li>每个节点账号需要 KV 绑定 <code>NT_MU</code>（命名空间 nicetunnel-mu）和 Analytics Engine 绑定 <code>NT_AE</code>（数据集 nicetunnel_mu），加完重新部署一次。点「自动配置」用账号的 Token 完成，Token 需要 <b>Workers KV Storage: Edit</b>、<b>Cloudflare Pages: Edit</b>、<b>Account Analytics: Read</b>。</li>'
+      + '<li>自动配置失败时，按上面的名字在 Pages 项目「设置 → 绑定」里手动加，重新部署，再勾「已手动绑定并部署」。直接上传的项目要重新上传一次节点包。</li>'
+      + '<li>主站 Worker 建议加一个每分钟的 Cron 触发器 <code>* * * * *</code>（保留原来的 <code>*/5 * * * *</code>）：封禁约 1~2 分钟生效，并行超限约 2~7 分钟。不加则最慢 5 分钟同步一次。</li>'
+      + '<li>订阅类自动封禁规则需要主站 Worker 也绑定 Analytics Engine（变量名 <code>NT_AE</code>，数据集 nicetunnel_mu）。当前：' + (d.mainAe ? '<b style="color:var(--ok)">已绑定</b>' : '<b style="color:var(--warn)">未绑定</b>') + '。</li>'
+      + '<li>原来的共享订阅仍然有效，不受这里的封禁和并行限制。</li></ol>'
       + '<div class="tw"><table><thead><tr><th>账号</th><th title="Cloudflare Account ID">CF 账号</th><th>状态</th><th></th></tr></thead><tbody>' + (acc || '<tr><td colspan="4" class="mut">还没有节点账号</td></tr>') + '</tbody></table></div>'
-      + '<p class="mut">' + readyN + ' / ' + d.accounts.length + ' 个账号就绪。用户订阅只分配到就绪的账号；一个都没有时用主站自己。' + (d.sync ? '上次同步 ' + fmtT(d.sync.at) + '，超限用户 ' + d.sync.over + ' 个' + (d.sync.errors ? '，' + d.sync.errors + ' 个账号出错' : '') + '。' : '') + '</p></div>'
-      + '<div class="card"><h2><i></i>批量生成</h2><div class="row" style="gap:8px;align-items:flex-end">'
-      + '<div class="f"><label>数量（1~500）</label><input id="uCount" type="number" value="10" min="1" max="500" style="width:100px"></div>'
-      + '<div class="f"><label>名称前缀（可空）</label><input id="uPrefix" placeholder="例如 客户A-" style="width:160px"></div>'
-      + '<div class="f"><label>并行上限（空 = 默认 ' + d.defaultLimit + '，0 = 不限）</label><input id="uLimit" type="number" min="0" max="50" style="width:100px"></div>'
-      + '<button class="btn p" id="uCreate">生成</button></div>'
-      + (U.made ? '<div class="f wide" style="margin-top:10px"><label>新生成的订阅链接（每行一个）</label><textarea class="mono" readonly style="min-height:120px">' + h(U.made) + '</textarea><div><button class="btn sm" data-copy="' + h(U.made) + '">全部复制</button></div></div>' : '')
-      + '<p class="mut">链接永久有效。每条链接对应一个用户：节点用他自己的凭据，封禁或删除后立即失效（约 1~2 分钟内到达各节点）。原有的订阅链接不受影响。</p></div>'
-      + '<div class="card"><h2><i></i>用户（' + d.total + '）<span class="sp"></span><input id="uQ" value="' + h(U.q) + '" placeholder="搜索 ID / 名称" style="width:160px"><button class="btn sm" id="uSearch">搜索</button><button class="btn sm" id="uStats">刷新在线</button></h2>'
-      + '<div class="row" style="gap:8px;margin-bottom:10px"><label class="row" style="gap:6px;cursor:pointer"><input type="checkbox" id="uPickAll" ' + (d.users.length && d.users.every((u) => U.picked.has(u.id)) ? 'checked' : '') + '>全选本页</label><span class="mut">已选 ' + U.picked.size + ' 个</span><span class="sp"></span>'
-      + '<button class="btn sm" id="uBan">封禁</button><button class="btn sm" id="uUnban">解封</button><input id="uSetLimit" type="number" min="0" max="50" placeholder="并行数" style="width:80px"><button class="btn sm" id="uApplyLimit">设并行</button><button class="btn sm" id="uDefLimit">恢复默认</button><button class="btn sm" id="uCopySel">复制链接</button><button class="btn sm d" id="uDel">删除</button></div>'
-      + '<div class="tw"><table><thead><tr><th></th><th>ID</th><th>名称</th><th>状态</th><th>并行上限</th><th title="最近 5 分钟有连接的不同 IP 数">在线 IP</th><th>24 小时连接</th><th>最后在线</th><th>订阅链接</th></tr></thead><tbody>' + (rows || '<tr><td colspan="9" class="mut">' + (d.total ? '没有匹配的用户' : '还没有用户：在上面批量生成') + '</td></tr>') + '</tbody></table></div>'
-      + '<div class="row" style="margin-top:8px;gap:8px"><span class="mut">' + statsNote + '</span><span class="sp"></span><button class="btn sm" id="uPrev" ' + (page <= 1 ? 'disabled' : '') + '>上一页</button><span class="mut">' + page + ' / ' + pages + '</span><button class="btn sm" id="uNext" ' + (page >= pages ? 'disabled' : '') + '>下一页</button></div>'
-      + '<p class="mut">并行上限按"同时在线的不同 IP"计（IPv6 按 /64）：超过后，先连上的设备保留，多出来的新连接被拒绝。同一台设备同时有 IPv4 和 IPv6 会算 2 个，手机切换网络时旧 IP 约 5 分钟后释放，所以一个人建议设 2。</p></div>';
+      + '<p class="mut" style="margin:10px 0 0">' + readyN + ' / ' + d.accounts.length + ' 个账号就绪。用户订阅只分配到就绪的账号；一个都没有时用主站自己。' + (d.sync ? '上次同步 ' + fmtT(d.sync.at) + '，超限用户 ' + d.sync.over + ' 个' + (d.sync.errors ? '，' + d.sync.errors + ' 个账号出错' : '') + '。' : '') + '</p></div>';
   }
   async function usersLoad() {
     const qs = 'users?offset=' + U.offset + '&limit=' + U.limit + (U.q ? '&q=' + encodeURIComponent(U.q) : '');
@@ -586,9 +642,12 @@ function clientMain() {
     usersPaint();
   }
   function usersPaint() {
-    const root = $('#usersRoot'); if (!root) return;
-    root.innerHTML = usersHtml();
+    const root = $('#usersRoot'); if (!root || !U.data) return;
+    root.innerHTML = usersListHtml();
     usersBind(root);
+    const acc = $('#usersAcc');
+    if (acc) { acc.innerHTML = usersAccHtml(); usersBind(acc); }
+    rebuildToc(); // 卡片是异步渲染的：渲染完重新生成页内索引
   }
   function usersInit(root) {
     if (U.data) usersPaint();
@@ -615,8 +674,9 @@ function clientMain() {
     on('uSync', async () => { const r = await api('users/sync', 'POST', {}); toast('已同步：在线 ' + r.online + '，超限 ' + r.over + (Object.keys(r.errors || {}).length ? '，' + Object.keys(r.errors).length + ' 个账号出错' : '')); await usersLoad(); });
     on('uPrev', async () => { U.offset = Math.max(0, U.offset - U.limit); await usersLoad(); });
     on('uNext', async () => { U.offset += U.limit; await usersLoad(); });
-    on('uBan', () => upd({ banned: true }, '已封禁'));
+    on('uBan', () => { const hrs = Number($('#uBanDur', root)?.value || 0); return upd({ banned: true, banHours: hrs }, hrs ? '已封禁（' + $('#uBanDur', root).selectedOptions[0].textContent + '）' : '已永久封禁'); });
     on('uUnban', () => upd({ banned: false }, '已解封'));
+    on('uResetVio', () => upd({ resetVio: true }, '违规次数已清零'));
     on('uApplyLimit', () => { const v = $('#uSetLimit', root).value.trim(); if (v === '') return toast('先填并行数（0 = 不限）'); return upd({ limit: Number(v) }, '已设置'); });
     on('uDefLimit', () => upd({ limit: null }, '已恢复默认'));
     on('uDel', async () => { const ids = sel(); if (!ids) return; if (!confirm('删除选中的 ' + ids.length + ' 个用户？他们的链接会立即失效，且无法恢复。')) return; const r = await api('users/delete', 'POST', { ids }); U.picked.clear(); toast('已删除 ' + r.removed + ' 个' + pushMsg(r)); await usersLoad(); });
@@ -682,8 +742,15 @@ function clientMain() {
     t.querySelectorAll('.btn, .hint, .sp, label, select, input').forEach((x) => x.remove());
     return t.textContent.replace(/（[^）]*）|\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
   };
+  // 用户页的卡片在 #usersRoot / #usersAcc 里（异步渲染），也算进索引
+  const tocCards = (main) => [...main.querySelectorAll(':scope > .card, :scope > #usersRoot > .card, :scope > #usersAcc > .card')];
+  function rebuildToc() {
+    const main = $('main'); if (!main) return;
+    const old = main.querySelector('.toc'); if (old) old.remove();
+    buildToc(main);
+  }
   function buildToc(main) {
-    const cards = [...main.querySelectorAll(':scope > .card')];
+    const cards = tocCards(main);
     if (cards.length < 3) return;
     cards.forEach((c, i) => { c.id = 'sec-' + i; });
     // 用 div 而不是 nav：全局的 nav 样式（侧栏用，纵向排列）会套到索引上
@@ -720,7 +787,7 @@ function clientMain() {
   }
   function syncToc() {
     const toc = $('.toc'); if (!toc || Date.now() < tocLock) return;
-    const cards = [...document.querySelectorAll('main > .card[id^="sec-"]')];
+    const cards = [...document.querySelectorAll('main .card[id^="sec-"]')];
     const line = tocOffset() + 8;
     let cur = 0;
     cards.forEach((c, i) => { if (c.getBoundingClientRect().top <= line) cur = i; });
@@ -873,6 +940,15 @@ function clientMain() {
       showOut('outRegions', `<h3>地区列表：${r.regions.length} 个地区 / ${r.count} 个节点（${r.ms}ms）</h3>${r.warnings?.length ? `<pre>${h(r.warnings.join('\n'))}</pre>` : ''}<div class="row">${r.regions.map((g) => `<span class="tag">${h(g.name)} × ${g.nodes}</span>`).join('') || '<span class="mut">没有解析到任何地区，请检查列表格式与地区规则</span>'}</div><p class="mut" style="margin:10px 0 0">入口地址：${r.entries} 个${r.entries ? '' : '（列表里没有入口地址，将使用随机优选池的地址作为入口）'}</p>`);
     });
     on('testCidr', () => testSrc('cidr', 'outCidr'));
+    on('abRun', async () => {
+      if (dirty) return toast('自动封禁设置有改动没保存：先点保存');
+      showOut('outAb', '<p class="mut">检查中…</p>');
+      const r = await api('users/autoban/run', 'POST', {});
+      const errs = Object.values(r.errors || {});
+      showOut('outAb', (r.banned.length ? `<h3>封禁了 ${r.banned.length} 个用户</h3><pre>${h(r.banned.map((b) => b.id + '  ' + b.reason + '  ' + (b.until ? '至 ' + fmtT(b.until) : '永久')).join('\n'))}</pre>` : '<h3>没有用户触发规则</h3>')
+        + (r.notes?.length ? `<pre>${h(r.notes.join('\n'))}</pre>` : '') + (errs.length ? `<pre>查询失败：${h(errs.join('\n'))}</pre>` : ''));
+      if (r.banned.length) await usersLoad();
+    });
     on('homeRefresh', async () => {
       showOut('outHome', '<p class="mut">正在拉取 VPN Gate 列表（约 1MB，可能要几十秒）…</p>');
       const r = await api('home/refresh', 'POST', {});

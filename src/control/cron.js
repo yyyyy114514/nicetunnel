@@ -6,7 +6,7 @@ import { notifyUsageEvents } from './notify.js';
 import { pollAndPersist, refreshCidr } from './pipeline.js';
 import { refreshRulesStep } from './rulesfeed.js';
 import { refreshBest, bestIspKeys } from './bestfeed.js';
-import { syncUsers, MU_KEYS } from './users.js';
+import { syncUsers, runAutoBan, MU_KEYS } from './users.js';
 import { refreshHome, HOME_KEY } from './homefeed.js';
 
 /** 每分钟一次的触发器只做多用户同步（在线汇总 + 下发），其它任务仍按 5 分钟那个触发器跑 */
@@ -55,6 +55,12 @@ export async function runScheduled({ event, env, now = Date.now(), fetchFn = glo
     try {
       const [accounts, usage] = await Promise.all([store.getAccounts(), store.getUsage()]);
       report.users = await syncUsers({ store, settings, accounts, usage, fetchFn, now });
+      // 自动封禁：每 checkMinutes 分钟检查一次（分钟数能整除时）；有人被封就立刻再下发一次名单
+      const ab = settings.users?.autoBan;
+      if (ab?.enabled && Math.floor(now / 60e3) % (ab.checkMinutes || 10) === 0) {
+        report.autoBan = await runAutoBan({ store, settings, accounts, usage, fetchFn, now, mainAe: !!env?.NT_AE });
+        if (report.autoBan.banned.length) await syncUsers({ store, settings, accounts, usage, fetchFn, now, query: false });
+      }
     } catch (e) { report.errors.push('users: ' + e.message); }
   };
   if (event?.cron === MU_CRON) { await runUsers(); return report; }
@@ -65,7 +71,8 @@ export async function runScheduled({ event, env, now = Date.now(), fetchFn = glo
       const accounts = await store.getAccounts();
       if (accounts.length) {
         // 多用户同步每个账号最多 2 个子请求（AE 查询 + KV 写入）
-        const reserve = CRON_RESERVE + (muNeeded ? 2 * Math.min(20, muAccounts) : 0);
+        // 自动封禁检查：每个账号每个统计窗口 1 次查询，外加最多几个"刚封禁过"用户的单独查询和主站 1 次
+        const reserve = CRON_RESERVE + (muNeeded ? 2 * Math.min(20, muAccounts) : 0) + (settings.users?.autoBan?.enabled ? 2 * Math.min(20, muAccounts) + 4 : 0);
         const r = await pollAndPersist({ store, settings, accounts, now, fetchFn, tickMinutes: TICK_MS / 60e3, reserve });
         report.usage = { polled: r.polled.length, ok: r.polled.filter((p) => p.ok).length, persisted: r.persisted };
         if (r.events.length) await notifyUsageEvents({ settings, events: r.events, accounts, fetchFn, now });

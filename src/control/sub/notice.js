@@ -4,7 +4,7 @@
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 /** 节点名里不能有换行、逗号、等号（Surge）、引号 */
-const nodeName = (s) => String(s || '').replace(/[\r\n,="']/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || '此链接已停用';
+const nodeName = (s) => String(s || '').replace(/[\r\n,="']/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || '此链接已停用';
 const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 
 /**
