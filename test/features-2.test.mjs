@@ -124,7 +124,9 @@ test('家宽：解析 VPN Gate 列表——只留 TCP、去掉自营机房、证
   assert.deepEqual(front.proxies, ['tls-1'], '前置只用本项目的普通 TLS 节点（不用地区路由 / 链式 / 明文 / 第三方）');
   assert.equal(front.type, 'url-test', '前置自动选可用节点');
   assert.deepEqual(h.groups[0].proxies.slice(0, 2), ['🏠 家宽自动', '🏠 家宽节点'], '默认走家宽');
-  assert.equal(h.groups.find((g) => g.name === '🏠 家宽自动').type, 'fallback');
+  const auto = h.groups.find((g) => g.name === '🏠 家宽自动');
+  assert.equal(auto.type, 'url-test', '自动选最快的');
+  assert.equal(auto.timeout, 10000);
 });
 
 test('家宽订阅：开启后 &target=home 出 Clash（OpenVPN 节点 + 家宽组）；没开 403；列表没准备好 503；Cron 到点刷新', async () => {
