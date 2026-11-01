@@ -143,7 +143,7 @@ export function defaultSettings() {
       dailyBudget: 330000, // 付费账号的每日预算（10M/月 ÷ 30），用于分配权重；账号自己填了每日额度时以账号为准
     },
     // 多用户专属链接（见 control/users.js）：开启后后台多一个「用户」页
-    users: { enabled: false, defaultLimit: 2 },
+    users: { enabled: false, defaultLimit: 2, banMessage: '此链接已停用，请联系管理员' },
     ui: { simpleMode: false },
   };
 }
@@ -347,6 +347,8 @@ export function normalizeSettings(raw) {
   const us = s.users;
   us.enabled = bool(us.enabled, false);
   us.defaultLimit = int(us.defaultLimit, 2, 0, 50); // 0 = 不限
+  // 被封禁用户拉订阅时看到的提示（占位节点的名字 / 浏览器提示页的标题）
+  us.banMessage = String(us.banMessage ?? '').replace(/[\x00-\x1f\x7f<>]/g, '').trim().slice(0, 60) || '此链接已停用，请联系管理员';
 
   s.ui.simpleMode = bool(s.ui.simpleMode, false);
   return s;

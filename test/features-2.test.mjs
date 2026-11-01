@@ -201,3 +201,20 @@ test('家宽订阅遇到不支持的客户端：退回它能用的普通订阅�
     assert.ok((await ok.text()).includes('"type":"openvpn"'));
   } finally { globalThis.fetch = realFetch; }
 });
+
+test('封禁提示：各格式都是合法配置，只有一个提示节点、规则全直连；浏览器给提示页', async () => {
+  const { noticeConfig, noticeHtml } = await import('../src/control/sub/notice.js');
+  const msg = '账号已到期，请续费';
+  const clash = noticeConfig('clash', msg).body;
+  const lines = clash.split('\n');
+  const proxy = JSON.parse(lines[lines.indexOf('proxies:') + 1].replace(/^\s*- /, ''));
+  assert.equal(proxy.name, '⛔ ' + msg);
+  assert.ok(clash.includes('MATCH,DIRECT'), '规则全直连，不断网');
+  const sb = JSON.parse(noticeConfig('singbox', msg).body);
+  assert.equal(sb.route.final, 'direct');
+  assert.ok(sb.outbounds.some((o) => o.tag === '⛔ ' + msg));
+  assert.ok(noticeConfig('surge', msg).body.includes('FINAL,DIRECT'));
+  assert.ok(decodeURIComponent(atob(noticeConfig('base64', msg).body)).includes(msg));
+  assert.ok(!noticeConfig('surge', 'a,b=c\nd').body.includes('a,b=c'), 'Surge 名字里的逗号等号换行被去掉');
+  assert.ok(noticeHtml({ siteName: 's', message: '<x>' }).includes('&lt;x&gt;'));
+});

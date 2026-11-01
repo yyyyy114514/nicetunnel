@@ -197,7 +197,12 @@ test('后台 + 订阅：开启后批量生成 → 专属订阅用该用户的 UU
   assert.ok(!(await sub(u0.sub.replace(/.$/, (c) => (c === '0' ? '1' : '0')))).headers.get('content-type')?.includes('octet'));
   // 封禁
   assert.equal((await call('/admin/api/users/update', 'POST', { ids: [u0.id], banned: true })).status, 200);
-  assert.equal((await sub(u0.sub)).status, 403);
+  // 被封禁：客户端拿到只有提示节点的配置（不是 403，客户端才看得到原因）
+  const banned = await sub(u0.sub);
+  assert.equal(banned.headers.get('X-NT-Status'), 'banned');
+  const bannedText = atob((await banned.text()).trim());
+  assert.ok(decodeURIComponent(bannedText).includes('此链接已停用'), bannedText);
+  assert.ok(!bannedText.includes(await userUuid(await nodeKeyOf(secret), u0.id)), '不再给真实凭据');
   assert.deepEqual(JSON.parse(kv.m.get(MU_STATE_KEY)).ids.includes(u0.id), false, '下发的名单里没有被封的用户');
   // 原订阅照常
   assert.equal((await worker.fetch(new Request('https://vp.example.com/sub?token=' + id.subToken, { headers: { 'User-Agent': 'v2rayN' } }), env, { waitUntil() {} })).status, 200);

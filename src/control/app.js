@@ -15,6 +15,7 @@ import { handleLogin, handleLogout, requireAuth, isAuthed, bearerToken, safeEqua
 import { trackRequest } from './logs.js';
 import { verifySubToken, readyAccountSet } from './users.js';
 import { landingHtml } from './sub/landing.js';
+import { noticeConfig, noticeHtml } from './sub/notice.js';
 import { homeClientSupport } from './homefeed.js';
 import { buildSubscription, pollAndPersist } from './pipeline.js';
 import { refreshRulesStep, getRulesStatus, fetchAndSaveIni } from './rulesfeed.js';
@@ -163,7 +164,19 @@ export async function handleMain({ request, env, ctx, url, identity }) {
     let user = null, muReady = null;
     if (userTok) {
       const v = await verifySubToken({ store, settings: stored, token: userTok });
-      if (!v.ok && v.code === 'banned') return new Response('此链接已停用', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+      if (!v.ok && v.code === 'banned') {
+        // 被封禁：浏览器给提示页；客户端给一份只有"提示语占位节点"的配置（规则全直连），用户在节点列表里就能看到原因。
+        // 只回 403 的话客户端一般只显示"更新失败"
+        const msg = stored.users?.banMessage || '此链接已停用，请联系管理员';
+        const noStore = { 'Cache-Control': 'no-store', 'X-NT-Status': 'banned' };
+        if (browserUa && [...url.searchParams.keys()].every((k) => k === 'u')) {
+          return new Response(noticeHtml({ siteName: stored.site?.name || 'nicetunnel', message: msg }), { status: 403, headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Robots-Tag': 'noindex', ...noStore } });
+        }
+        const fmtUrl = new URL(url.href);
+        if (fmtUrl.searchParams.get('target') === 'home') fmtUrl.searchParams.delete('target');
+        const nc = noticeConfig(detectFormatInfo(fmtUrl, ua).format, msg);
+        return new Response(nc.body, { status: 200, headers: { 'Content-Type': nc.contentType, 'Subscription-Userinfo': `upload=0; download=0; total=0; expire=${Math.floor(now / 1000)}`, ...noStore } });
+      }
       if (!v.ok) return camouflage(request, url, env.URL || 'nginx');
       user = { id: v.user.id, uuid: v.uuid, token: v.token };
       // 用户在浏览器里打开自己的链接（只带 u 参数）：给落地页（一键导入 / 二维码 / 复制），不给一堆配置文本。
