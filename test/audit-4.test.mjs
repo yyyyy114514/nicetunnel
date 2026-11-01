@@ -278,3 +278,21 @@ test('自动配置 + Analytics Engine：查不了 AE 就不加 NT_AE；部署因
   assert.equal(m4.redeployed, false);
   assert.equal(m4.bindDeployId, 'd-new');
 });
+
+test('自动配置：部署因没开通 AE 失败、管理员随后开通了：一次就补齐 NT_AE，不再先删后加', async () => {
+  const patches = [];
+  const fetchFn = async (url, init = {}) => {
+    const u = String(url);
+    const ok = (result) => new Response(JSON.stringify({ success: true, result }));
+    const proj = { name: 'p', subdomain: 'p.pages.dev', domains: ['n1.com'], canonical_deployment: { id: 'd-old', latest_stage: { status: 'success' } }, latest_deployment: { id: 'd-fail', latest_stage: { status: 'failure' } } };
+    if (u.endsWith('/analytics_engine/sql')) return new Response('{"data":[]}');
+    if (u.endsWith('/history/logs')) return ok({ data: [{ line: 'Error: Failed to publish your Function. Got error: You need to enable Analytics Engine.' }] });
+    if (/\/pages\/projects\/p$/.test(u)) { if (init.method === 'PATCH') { patches.push(JSON.parse(init.body)); return ok({}); } return ok(proj); }
+    return ok({});
+  };
+  const m = await setupAccount({ account: { id: 'a', hosts: ['n1.com'], auth: { apiToken: 't'.repeat(40) } }, cfId: HEX(1), fetchFn, now: 1, prev: { nsId: 'ns1', bound: true, project: 'p', deployId: 'd-old', directUpload: true } });
+  assert.equal(patches.length, 1);
+  assert.deepEqual(patches[0].deployment_configs.production.analytics_engine_datasets, { NT_AE: { dataset: 'nicetunnel_mu' } });
+  assert.equal(m.aeMissing, false);
+  assert.match(m.err, /已开通/);
+});

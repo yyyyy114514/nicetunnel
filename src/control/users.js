@@ -229,6 +229,12 @@ export async function setupAccount({ account, cfId, fetchFn, now, prev = {}, red
         const lines = (lg.json?.result?.data || []).map((l) => String(l.line || ''));
         const errLine = lines.reverse().find((l) => /error/i.test(l)) || '';
         if (/enable Analytics Engine/i.test(errLine)) {
+          // 管理员看到失败后已经开通了 AE：补齐 NT_AE（之前可能被去掉了），只差再上传一次
+          const aeNow = await aeQuery(fetchFn, account, cfId, ONLINE_SQL);
+          if (aeNow.ok) {
+            const add = await cfApi(fetchFn, account, 'PATCH', projPath, { deployment_configs: { production: { analytics_engine_datasets: { [MU_AE_BINDING]: { dataset: MU_DATASET } } } } });
+            if (add.ok) return { ...meta, aeMissing: false, aeErr: '', err: 'Analytics Engine 已开通，NT_MU / NT_AE 绑定都已就位。上次部署是在开通之前失败的：请再上传一次节点包，然后再点「自动配置」' };
+          }
           // 账号没开通 AE：去掉 NT_AE 绑定，让部署能成功（封禁照常生效；开通 AE 后再点一次自动配置会加回）
           const rm = await cfApi(fetchFn, account, 'PATCH', projPath, { deployment_configs: { production: { analytics_engine_datasets: { [MU_AE_BINDING]: null } } } });
           if (!rm.ok) return { ...meta, aeMissing: true, err: '上次部署失败：这个账号没开通 Analytics Engine。自动去掉 NT_AE 绑定也失败了（' + rm.error + '）：请在 Pages 设置 → 绑定里删掉 NT_AE，或者在 Cloudflare 控制台开通 Analytics Engine，然后重新上传一次' };
