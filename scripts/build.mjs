@@ -233,8 +233,8 @@ async function emitTarget({ entryName, workerName, zipName, label, requireSchedu
   // zip 只使用本项目文件，不夹带上游仓库的 workflows 或大体积占位注释。
   const zipFiles = [{ name: '_worker.js', data: Buffer.from(code, 'utf8') }];
   const withExtras = !argv.includes('--no-extras');
-  if (withExtras) {
-    // zip = _worker.js + 发布素材（状态页门面与文档，来自 scripts/assets/package/）+ LICENSE。
+  if (withExtras && fullPackage) {
+    // 全量包（Workers 主站部署用）：worker + 发布素材（状态页门面与文档，来自 scripts/assets/package/）+ LICENSE。
     // NOTICE.md / wrangler.toml 也在 package/ 里，内容与伪装形象一致；不再从项目根目录取。
     const extrasDir = path.join(root, 'scripts', 'assets', 'package');
     if (!fs.existsSync(extrasDir)) throw new Error('缺少 scripts/assets/package（或加 --no-extras 跳过）');
@@ -244,6 +244,11 @@ async function emitTarget({ entryName, workerName, zipName, label, requireSchedu
     extras.push({ name: 'LICENSE', data: fs.readFileSync(path.join(root, 'LICENSE')) });
     extras.sort((a, b) => (a.name < b.name ? -1 : 1));
     zipFiles.push(...extras);
+  } else if (withExtras) {
+    // 节点包（Pages 上传部署用）：对齐上游极简内核的发布形态（byjoey/cfnew 的 Pages.zip 只有 _worker.js）。
+    // Pages 高级模式下 _worker.js 接管全部请求，门面/文档不会被服务，放进包里只会构成
+    // 「包内容与站点行为不符」的暴露面；只保留 LICENSE 满足 GPL 随分发要求。
+    zipFiles.push({ name: 'LICENSE', data: fs.readFileSync(path.join(root, 'LICENSE')) });
   }
   const zipPath = path.join(distDir, zipName);
   fs.writeFileSync(zipPath, makeZip(zipFiles));

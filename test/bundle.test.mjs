@@ -132,20 +132,16 @@ test('纯节点包：与全量包的 node 角色响应一致，且无主站定�
   } finally { globalThis.fetch = real; }
 });
 
-test('nicetunnel-node.zip：节点 worker + 与全量包相同的伪装素材', { skip: nodeHas ? false : '未构建，跳过' }, () => {
+test('nicetunnel-node.zip：Pages 上传用的极简形态（对齐上游 cfnew：只含 worker 与 LICENSE）', { skip: nodeHas ? false : '未构建，跳过' }, () => {
   const zipFile = fileURLToPath(new URL('../dist/nicetunnel-node.zip', import.meta.url));
   const files = readZip(fs.readFileSync(zipFile));
   assert.ok(files.has('_worker.js'));
   assert.ok(files.get('_worker.js').equals(fs.readFileSync(nodeFile)));
   if (files.size === 1) return; // --no-extras 构建
-  // 节点包与全量包同一套发布素材（状态页门面 + 文档 + LICENSE），对外形象一致
-  const packageFiles = ['CHANGELOG.md', 'DEPLOY.md', 'NOTICE.md', 'README.md', '_headers', 'favicon.svg', 'index.html', 'robots.txt', 'wrangler.toml', 'LICENSE'];
-  assert.deepEqual([...files.keys()].filter((k) => k !== '_worker.js').sort(), packageFiles.slice().sort());
-  // 伪装素材里的文档不应出现代理域关键词
-  for (const name of ['README.md', 'DEPLOY.md', 'CHANGELOG.md', 'NOTICE.md', 'index.html']) {
-    const text = files.get(name).toString('utf8');
-    for (const kw of ['vless', 'trojan', 'clash', 'socks', 'proxy', 'tunnel', '反代', '代理', '订阅', '伪装']) {
-      assert.ok(!new RegExp(kw, 'i').test(text), `${name} 不含「${kw}」`);
-    }
+  assert.deepEqual([...files.keys()].sort(), ['LICENSE', '_worker.js'].sort(), '节点包只含 _worker.js 与 LICENSE，不放门面/文档（Pages 高级模式下它们不会被服务）');
+  // worker 内不应出现代理域关键词与平台 API 明文之外的身份证词
+  const code = files.get('_worker.js').toString('utf8');
+  for (const kw of ['edgetunnel', 'cmliu', 'nicetunnel', 'vless://', 'trojan://', 'socks5://', '反代', '代理', '订阅', '伪装', 'cloudflare:sockets', 'WebSocketPair']) {
+    assert.ok(!new RegExp(kw, 'i').test(code), `节点包 worker 不含「${kw}」明文`);
   }
 });
