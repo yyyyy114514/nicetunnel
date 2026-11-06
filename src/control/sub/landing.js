@@ -25,7 +25,7 @@ export function importLinks(subUrl, name = '', { home = false } = {}) {
  * @param {{siteName:string, subUrl:string, name?:string}} o
  * @returns {string}
  */
-export function landingHtml({ siteName, subUrl, name = '', home = false }) {
+export function landingHtml({ siteName, subUrl, name = '', home = false, label = '', labelSet = false }) {
   const title = name ? `${name} 的订阅` : '我的订阅';
   let qr = '';
   try { qr = qrSvg(subUrl, { px: 5 }); } catch { qr = ''; }
@@ -49,6 +49,14 @@ ol{margin:6px 0 0;padding-left:20px}li{margin:2px 0}
 ${qr ? `<section class="card"><div class="mut" style="margin-bottom:10px">用另一台设备的客户端扫码导入</div><div class="qr">${qr}</div></section>` : ''}
 <section class="card"><div class="mut" style="margin-bottom:8px">或者复制订阅链接，在客户端里手动添加</div><div class="row"><input id="u" readonly value="${esc(subUrl)}"><button id="c" type="button">复制</button></div>
 <ol class="mut"><li>按钮没反应：说明没装这个客户端，或客户端不支持一键导入，用复制链接的方式添加。</li><li>客户端里记得定期"更新订阅"，节点会自动调整。</li></ol></section>
-</main><script>document.getElementById('c').onclick=function(){var i=document.getElementById('u');var done=function(){document.getElementById('c').textContent='已复制'};if(navigator.clipboard){navigator.clipboard.writeText(i.value).then(done,function(){i.select();document.execCommand('copy');done()})}else{i.select();document.execCommand('copy');done()}};</script>
+<section class="card" id="lb"><div class="mut" style="margin-bottom:8px">我的标识（方便管理员认出你，例如昵称或联系方式）</div>${labelSet
+    ? `<div style="font-weight:600">${esc(label)}</div><div class="mut" style="margin-top:4px">已设置，不能自己修改；需要修改请联系管理员</div>`
+    : `<div class="row"><input id="lv" maxlength="30" placeholder="最多 30 字" style="font:15px system-ui,sans-serif"><button id="ls" type="button">提交</button></div><div class="mut" id="lm" style="margin-top:6px">只能设置一次，提交后不能自己修改</div>`}</section>
+</main><script>document.getElementById('c').onclick=function(){var i=document.getElementById('u');var done=function(){document.getElementById('c').textContent='已复制'};if(navigator.clipboard){navigator.clipboard.writeText(i.value).then(done,function(){i.select();document.execCommand('copy');done()})}else{i.select();document.execCommand('copy');done()}};
+(function(){var b=document.getElementById('ls');if(!b)return;var m=document.getElementById('lm');b.onclick=function(){var v=document.getElementById('lv').value.trim();if(!v){m.textContent='请填写内容';return}
+if(!confirm('确定把标识设置为「'+v+'」吗？\n只能设置一次，提交后不能自己修改。'))return;b.disabled=true;
+fetch('/sub/label'+location.search,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:v})}).then(function(r){return r.json()}).then(function(j){
+if(j.ok){var s=document.getElementById('lb');s.innerHTML='<div class="mut" style="margin-bottom:8px">我的标识</div><div style="font-weight:600"></div><div class="mut" style="margin-top:4px">已设置，不能自己修改；需要修改请联系管理员</div>';s.children[1].textContent=j.label}
+else{m.textContent=j.error||'提交失败';b.disabled=false}}).catch(function(){m.textContent='网络错误，请稍后再试';b.disabled=false})}})();</script>
 </body></html>`;
 }

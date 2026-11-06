@@ -162,7 +162,7 @@ export function addHomeToClash(home, proxies, groups) {
     // 前置自动选延迟最低的可用节点：手动选择组默认用第一个，那个节点不通时所有家宽节点都会超时
     { name: FRONT, type: 'url-test', proxies: front, url: 'http://www.gstatic.com/generate_204', interval: 300, tolerance: 50 },
   ];
-  const firstSelect = groups.findIndex((g) => g.type === 'select');
+  const firstSelect = groups.findIndex((g) => g.type === 'select' && !g.notice);
   const next = groups.map((g, i) => (i === firstSelect ? { ...g, proxies: [AUTO, PICK, ...g.proxies.filter((x) => x !== AUTO && x !== PICK)] } : g));
   return { proxies: proxies.concat(ovpn), groups: next.concat(homeGroups), added: ovpn.length };
 }

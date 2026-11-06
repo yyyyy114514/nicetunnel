@@ -59,6 +59,7 @@ export function defaultSettings() {
       sort: false,
       userinfo: true, // 在 Subscription-Userinfo 里展示整个号池的额度
       rateLimitPerMinute: 10, // 同一 IP 每分钟最多拉取订阅次数（isolate 内近似限速），0=不限
+      announcement: '', // 公告：Clash / sing-box / Surge 订阅里多一个以此为名的分组（排最前，只含直连，不影响使用）；留空不显示
       // 客户端测速（url-test / fallback / load-balance）默认完全按 INI 里每个组写的间隔（例如随机优选 300 秒、故障转移 180 秒）。
       // 以前默认把所有组拉到至少 600 秒、最长 1800 秒：坏掉或变慢的 CF IP 要 10~30 分钟才被换掉，表现为"卡、慢"。
       // testIntervalMin：所有组的间隔下限（秒），0 = 不设下限
@@ -251,6 +252,7 @@ export function normalizeSettings(raw) {
   u.updateHours = num(u.updateHours, 1, 0.05, 168);
   for (const k of ['emoji', 'udp', 'xudp', 'tls13', 'appendType', 'sort', 'userinfo']) u[k] = bool(u[k], d.sub[k]);
   u.rateLimitPerMinute = int(u.rateLimitPerMinute, 10, 0, 1000);
+  u.announcement = String(u.announcement ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
   u.testIntervalMin = int(u.testIntervalMin, 0, 0, 86400);
   u.testIntervalAuto = bool(u.testIntervalAuto, true);
   u.testIntervalFloor = int(u.testIntervalFloor, 180, 60, 86400);

@@ -250,6 +250,7 @@ function clientMain() {
       { t: "订阅内容", f: [
         ['site.name', '订阅名称'],
         ['sub.updateHours', '客户端更新间隔（小时）', 'num'],
+        ['sub.announcement', '公告（留空不显示）', 'text', null, 0, 'Clash / sing-box / Surge 订阅里会多一个以公告命名的分组，排在最前面，只含直连，不影响使用；用户更新订阅后看到。通用订阅（Shadowrocket / v2rayN）不显示。最多 40 字'],
         ['sub.rateLimitPerMinute', '同 IP 每分钟最多拉取（0=不限）', 'num', null, 1],
         ['sub.userinfo', '在客户端显示号池额度', 'bool'],
         ['sub.udp', 'UDP', 'bool', null, 1],
@@ -602,7 +603,7 @@ function clientMain() {
       const lim = u.effLimit ? u.effLimit + (u.limit == null ? ' <span class="mut">默认</span>' : '') : '不限';
       const online = s ? (s.online ? '<b>' + s.online + '</b>' : '0') + (u.effLimit && s.online > u.effLimit ? ' <span class="pill p-exhausted">超限</span>' : '') : '<span class="mut">-</span>';
       const vio = u.vio ? '<span title="' + h('统计周期从 ' + fmtT(u.vioSince) + ' 起；上次原因：' + (u.banReason || '-')) + '">' + u.vio + ' 次</span>' : '<span class="mut">-</span>';
-      return '<tr><td><input type="checkbox" class="cb" data-upick="' + u.id + '" ' + (U.picked.has(u.id) ? 'checked' : '') + '></td><td class="mono">' + u.id + '</td><td><input data-uname="' + u.id + '" value="' + h(u.name) + '" style="min-width:96px;max-width:150px"></td>'
+      return '<tr><td><input type="checkbox" class="cb" data-upick="' + u.id + '" ' + (U.picked.has(u.id) ? 'checked' : '') + '></td><td class="mono">' + u.id + '</td><td><input data-uname="' + u.id + '" value="' + h(u.name) + '" style="min-width:96px;max-width:150px">' + (u.label ? '<div class="mut" style="font-size:12px;margin-top:3px;white-space:nowrap" title="用户在订阅页自己填写的标识' + (u.labelAt ? '（' + h(fmtT(u.labelAt)) + '）' : '') + '">用户填写：' + h(u.label) + '</div>' : '') + '</td>'
         + '<td>' + banCell(u) + '</td><td>' + vio + '</td><td style="white-space:nowrap">' + lim + '</td><td>' + online + '</td><td>' + (s && s.conns != null ? fmtN(s.conns) : '<span class="mut">-</span>') + '</td><td style="white-space:nowrap">' + (s && s.lastSeen ? fmtT(s.lastSeen) : '<span class="mut">-</span>') + '</td>'
         + '<td><div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-copy="' + h(u.sub) + '" title="' + h(u.sub) + '">复制链接</button><a class="btn sm" href="' + h(u.sub) + '" target="_blank" rel="noopener noreferrer" title="用户在浏览器里打开链接看到的页面：各客户端一键导入、二维码">导入页</a></div></td></tr>';
     }).join('');
@@ -611,10 +612,10 @@ function clientMain() {
     const statsNote = U.stats ? '统计范围：' + U.stats.accounts + ' 个账号' + (Object.keys(U.stats.errors || {}).length ? '，' + Object.keys(U.stats.errors).length + ' 个查询失败：' + h(Object.values(U.stats.errors)[0]) : '') : '点「刷新在线」查询（每个已配置账号 2 次 Analytics Engine 查询）';
     const allOn = d.users.length && d.users.every((u) => U.picked.has(u.id));
     const durs = [['0', '永久'], ['1', '1 小时'], ['24', '1 天'], ['72', '3 天'], ['168', '7 天'], ['720', '30 天']];
-    return '<div class="card"><h2><i></i>用户（' + d.total + (d.banned ? '，封禁中 ' + d.banned : '') + '）<span class="sp"></span><input id="uQ" value="' + h(U.q) + '" placeholder="搜索 ID / 名称" style="width:170px"><button class="btn sm" id="uSearch">搜索</button><button class="btn sm" id="uStats">刷新在线</button></h2>'
+    return '<div class="card"><h2><i></i>用户（' + d.total + (d.banned ? '，封禁中 ' + d.banned : '') + '）<span class="sp"></span><input id="uQ" value="' + h(U.q) + '" placeholder="搜索 ID / 名称 / 标识" style="width:170px"><button class="btn sm" id="uSearch">搜索</button><button class="btn sm" id="uStats">刷新在线</button></h2>'
       + '<div class="row" style="gap:8px;margin-bottom:12px">'
       + '<label class="row" style="gap:6px;cursor:pointer;flex-wrap:nowrap;white-space:nowrap"><input type="checkbox" class="cb" id="uPickAll" ' + (allOn ? 'checked' : '') + '>全选本页</label><span class="mut" style="white-space:nowrap">已选 ' + U.picked.size + ' 个</span><span class="sp"></span>'
-      + '<span class="row" style="gap:6px;flex-wrap:nowrap"><select id="uBanDur" style="width:auto" title="封禁时长">' + durs.map(([v, n]) => '<option value="' + v + '">' + n + '</option>').join('') + '</select><button class="btn sm" id="uBan">封禁</button><button class="btn sm" id="uUnban">解封</button><button class="btn sm" id="uResetVio" title="违规次数清零（自动封禁的阶梯从第 1 档重新算）">清零违规</button></span>'
+      + '<span class="row" style="gap:6px;flex-wrap:nowrap"><select id="uBanDur" style="width:auto" title="封禁时长">' + durs.map(([v, n]) => '<option value="' + v + '">' + n + '</option>').join('') + '</select><button class="btn sm" id="uBan">封禁</button><button class="btn sm" id="uUnban">解封</button><button class="btn sm" id="uResetVio" title="违规次数清零（自动封禁的阶梯从第 1 档重新算）">清零违规</button><button class="btn sm" id="uResetLabel" title="清空用户填写的标识，用户可以在订阅页重新填写一次">重置标识</button></span>'
       + '<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="uSetLimit" type="number" min="0" max="50" placeholder="并行数" style="width:86px"><button class="btn sm" id="uApplyLimit">设并行</button><button class="btn sm" id="uDefLimit">恢复默认</button></span>'
       + '<span class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" id="uCopySel">复制链接</button><button class="btn sm d" id="uDel">删除</button></span></div>'
       + '<div class="tw"><table><thead><tr><th></th><th>ID</th><th>名称</th><th>状态</th><th title="统计周期内的违规次数（自动封禁阶梯处罚用）">违规</th><th>并行上限</th><th title="最近 5 分钟有连接的不同 IP 数">在线 IP</th><th>24 小时连接</th><th>最后在线</th><th>订阅链接</th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="mut">' + (d.total ? '没有匹配的用户' : '还没有用户：在下面「批量生成」') + '</td></tr>') + '</tbody></table></div>'
@@ -696,6 +697,7 @@ function clientMain() {
     on('uBan', () => { const hrs = Number($('#uBanDur', root)?.value || 0); return upd({ banned: true, banHours: hrs }, hrs ? '已封禁（' + $('#uBanDur', root).selectedOptions[0].textContent + '）' : '已永久封禁'); });
     on('uUnban', () => upd({ banned: false }, '已解封'));
     on('uResetVio', () => upd({ resetVio: true }, '违规次数已清零'));
+    on('uResetLabel', () => { if (!confirm('清空选中用户填写的标识？他们可以在订阅页重新填写一次。')) return; return upd({ resetLabel: true }, '已重置标识'); });
     on('uApplyLimit', () => { const v = $('#uSetLimit', root).value.trim(); if (v === '') return toast('先填并行数（0 = 不限）'); return upd({ limit: Number(v) }, '已设置'); });
     on('uDefLimit', () => upd({ limit: null }, '已恢复默认'));
     on('uDel', async () => { const ids = sel(); if (!ids) return; if (!confirm('删除选中的 ' + ids.length + ' 个用户？他们的链接会立即失效，且无法恢复。')) return; const r = await api('users/delete', 'POST', { ids }); U.picked.clear(); toast('已删除 ' + r.removed + ' 个' + pushMsg(r)); await usersLoad(); });

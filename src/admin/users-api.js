@@ -59,7 +59,7 @@ export function createUsersRoutes(readJson) {
       const offset = Math.max(0, Number(u.searchParams.get('offset')) || 0);
       const limit = Math.max(1, Math.min(PAGE_MAX, Number(u.searchParams.get('limit')) || 100));
       const all = await getUsers(c.store);
-      const filtered = q ? all.filter((x) => x.id.includes(q) || x.name.toLowerCase().includes(q)) : all;
+      const filtered = q ? all.filter((x) => x.id.includes(q) || x.name.toLowerCase().includes(q) || (x.label || '').toLowerCase().includes(q)) : all;
       const page = filtered.slice().reverse().slice(offset, offset + limit); // 新建的在前
       return jsonResponse({
         ok: true, enabled: !!c.settings.users?.enabled, defaultLimit: c.settings.users?.defaultLimit ?? 2,
@@ -97,6 +97,8 @@ export function createUsersRoutes(readJson) {
         if (body.banned === true) v = banUser(v, { now: c.now, seconds: Math.max(0, Number(body.banHours) || 0) * 3600, reason: '手动封禁' });
         else if (body.banned === false) v = unbanUser(v, { now: c.now, resetVio: !!body.resetVio });
         else if (body.resetVio === true) v = { ...v, vio: 0, vioSince: 0 };
+        // 重置用户标识：清空并解锁，用户可以在订阅页重新填写一次
+        if (body.resetLabel === true) v = { ...v, label: '', labelAt: 0 };
         if ('limit' in body) v.limit = body.limit;
         if (typeof body.name === 'string' && ids.size === 1) v.name = body.name;
         return normalizeUser(v) || u;

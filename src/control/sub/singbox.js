@@ -117,7 +117,7 @@ export function renderSingbox({ outbounds, groups, rules, intervalOf = (x) => Nu
     if (g.tolerance !== undefined) o.tolerance = g.tolerance;
     return o;
   });
-  const final = rules?.final && (rules.final === 'direct' || groups.some((g) => g.name === rules.final)) ? rules.final : groups[0]?.name || 'direct';
+  const final = rules?.final && (rules.final === 'direct' || groups.some((g) => g.name === rules.final)) ? rules.final : groups.find((g) => !g.notice)?.name || 'direct';
   const dnsPart = singboxDns(final, legacyDns);
   const config = {
     log: { level: 'info', timestamp: true },

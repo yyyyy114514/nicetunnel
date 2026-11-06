@@ -87,6 +87,6 @@ export function renderSurge({ proxyLines, groups, rules, managedUrl, updateHours
   }
   out.push('', '[Rule]');
   if (rules?.rules) out.push(String(rules.rules).split(/\r?\n/).filter((x) => !/^\s*\[/.test(x)).join('\n'));
-  else out.push('FINAL,' + surgeName(groups[0]?.name || 'DIRECT'));
+  else out.push('FINAL,' + surgeName(groups.find((g) => !g.notice)?.name || 'DIRECT'));
   return out.join('\n') + '\n';
 }

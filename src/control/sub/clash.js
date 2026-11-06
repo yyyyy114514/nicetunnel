@@ -181,7 +181,7 @@ export function renderClash({ proxies, groups, rules, ctx, intervalOf = (x) => N
   // 规则块在 Cron 侧已预先缩进成 YAML 列表（rules.yaml）：热路径只做拼接，不再对几万行做 split/join（免费版 CPU 只有 10ms）
   if (rules?.yaml) out.push(rules.yaml);
   else if (body) out.push('  - ' + body.split('\n').join('\n  - '));
-  else out.push('  - MATCH,' + (groups[0]?.name || 'DIRECT'));
+  else out.push('  - MATCH,' + (groups.find((g) => !g.notice)?.name || 'DIRECT'));
   return out.join('\n') + '\n';
 }
 

@@ -31,6 +31,26 @@ const cleanName = (s) => String(s ?? '').replace(/[\x00-\x1f\x7f<>]/g, '').trim(
 /** limit：null = 用默认值；0 = 不限；1~50 */
 const cleanLimit = (v) => (v === null || v === undefined || v === '' ? null : Math.max(0, Math.min(MAX_LIMIT, Math.round(Number(v)) || 0)));
 
+/** 用户填写的标识：去掉控制字符和尖括号，最多 30 字 */
+export const cleanLabel = (s) => String(s ?? '').replace(/[\x00-\x1f\x7f<>"'`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 30);
+
+/**
+ * 用户在订阅页设置标识。只能设置一次（已设置返回 locked）；封禁中、链接无效都不行。
+ * @returns {Promise<{ok:true, label:string} | {ok:false, code:string}>}
+ */
+export async function setUserLabel({ store, settings, token, label, now = Date.now() }) {
+  const v = await verifySubToken({ store, settings, token });
+  if (!v.ok) return { ok: false, code: v.code };
+  const text = cleanLabel(label);
+  if (!text) return { ok: false, code: 'empty' };
+  const all = await getUsers(store);
+  const u = all.find((x) => x.id === v.user.id);
+  if (!u) return { ok: false, code: 'bad_token' };
+  if (u.labelAt) return { ok: false, code: 'locked', label: u.label };
+  await saveUsers(store, all.map((x) => (x.id === u.id ? { ...x, label: text, labelAt: now } : x)));
+  return { ok: true, label: text };
+}
+
 export function normalizeUser(u) {
   if (!u || typeof u !== 'object' || !/^[a-z0-9]{8}$/.test(String(u.id || ''))) return null;
   const n = (x) => Math.max(0, Math.round(Number(x) || 0));
@@ -39,6 +59,8 @@ export function normalizeUser(u) {
     // 封禁时长（0 = 永久）与原因；违规次数和统计起点（阶梯处罚用）；上次封禁 / 解封时间（规则只算之后的数据）
     bannedUntil: n(u.bannedUntil), banAuto: !!u.banAuto, banReason: String(u.banReason || '').replace(/[\x00-\x1f\x7f<>]/g, '').slice(0, 80),
     vio: n(u.vio), vioSince: n(u.vioSince), banAt: n(u.banAt), unbanAt: n(u.unbanAt),
+    // 用户自己在订阅页填写的标识（只能设置一次；labelAt > 0 表示已锁定，后台可重置）
+    label: cleanLabel(u.label), labelAt: n(u.labelAt),
   };
 }
 export const normalizeUsers = (list) => {

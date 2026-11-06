@@ -103,6 +103,14 @@ export function renderSubscription({ format, nodes, ctx, ini, rules }) {
   const aggregate = settings?.preferred?.random?.aggregate !== false;
   const hideOf = (kept) => (aggregate ? new Set(kept.filter((k) => k.cf).map((k) => k.name)) : null);
   if (rules?.status && rules.status !== 'expand') extraHeaders['X-NT-Rules'] = rules.status;
+  // 公告：排在最前面的一个分组，名字就是公告，只含直连（选中也不影响上网）。notice 标记让渲染器选默认分组时跳过它
+  const notice = String(settings?.sub?.announcement || '').trim();
+  const withNotice = (gs, clean = (s) => s) => {
+    if (!notice) return gs;
+    let name = clean(notice);
+    while (gs.some((g) => g.name === name)) name += ' ';
+    return [{ name, type: 'select', proxies: ['DIRECT'], notice: true }, ...gs];
+  };
 
   let body;
   if (fmt === 'clash') {
@@ -121,7 +129,7 @@ export function renderSubscription({ format, nodes, ctx, ini, rules }) {
       list = h.proxies;
       groups = h.groups;
     }
-    body = renderClash({ proxies: list, groups, rules: block, ctx: c, intervalOf });
+    body = renderClash({ proxies: list, groups: withNotice(groups), rules: block, ctx: c, intervalOf });
   } else if (fmt === 'surge') {
     const lines = [];
     const kept = [];
@@ -132,7 +140,7 @@ export function renderSubscription({ format, nodes, ctx, ini, rules }) {
     });
     const groups = withTol(resolveGroups({ ...model, groups: model.groups.map((g) => ({ ...g, name: surgeName(g.name), members: g.members.map((m) => (m.kind === 'ref' ? { ...m, value: surgeName(m.value) } : m)) })) }, kept, warnings, { hide: hideOf(keptInfo) }));
     const managedUrl = ctx.requestUrl || '';
-    body = renderSurge({ proxyLines: lines, groups, rules: block, managedUrl, updateHours: settings?.sub?.updateHours, intervalOf });
+    body = renderSurge({ proxyLines: lines, groups: withNotice(groups, surgeName), rules: block, managedUrl, updateHours: settings?.sub?.updateHours, intervalOf });
   } else {
     const outbounds = [];
     const sbInfo = [];
@@ -141,7 +149,7 @@ export function renderSubscription({ format, nodes, ctx, ini, rules }) {
       if (o) { outbounds.push(o); sbInfo.push({ name: names[i], cf: e.cf }); } else warnings.push(`sing-box 不支持的节点已跳过：${names[i]}`);
     });
     const groups = withTol(resolveGroups(model, outbounds.map((o) => o.tag), warnings, { hide: hideOf(sbInfo) }));
-    body = renderSingbox({ outbounds, groups, rules: block, intervalOf, legacyDns: legacyDnsFor(ctx.userAgent) });
+    body = renderSingbox({ outbounds, groups: withNotice(groups), rules: block, intervalOf, legacyDns: legacyDnsFor(ctx.userAgent) });
   }
   if (warnings.length) extraHeaders['X-NT-Render-Warnings'] = String(warnings.length);
   return { body, contentType: CONTENT_TYPES[fmt] || 'text/plain; charset=utf-8', extraHeaders, warnings };

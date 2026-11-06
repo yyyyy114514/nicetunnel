@@ -13,7 +13,7 @@ import { detectIsp } from '../lib/isp.js';
 import { UUID_RE } from './identity.js';
 import { handleLogin, handleLogout, requireAuth, isAuthed, bearerToken, safeEqual } from './auth.js';
 import { trackRequest } from './logs.js';
-import { verifySubToken, readyAccountSet } from './users.js';
+import { verifySubToken, readyAccountSet, setUserLabel } from './users.js';
 import { landingHtml } from './sub/landing.js';
 import { noticeConfig, noticeHtml } from './sub/notice.js';
 import { banNotice } from './autoban.js';
@@ -156,6 +156,21 @@ export async function handleMain({ request, env, ctx, url, identity }) {
     }
   }
 
+  // 用户在订阅页设置自己的标识：PUT /sub/label?u=<令牌>，JSON {label}。只能设置一次；与拉订阅共用限速。
+  // 用 PUT 不用 POST：数据面会把非后台路径的 POST 当成 XHTTP 代理流量接走（改那边会连带改动节点包）
+  if (lower === 'sub/label' && request.method === 'PUT') {
+    const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+    if (!/application\/json/i.test(request.headers.get('Content-Type') || '')) return json({ ok: false, error: '请求格式不对' }, 415);
+    const stored = await store.getSettings();
+    if (rateLimited(ip, stored.sub.rateLimitPerMinute, now)) return json({ ok: false, error: '操作太频繁，请稍后再试' }, 429);
+    let body = {};
+    try { body = await request.json(); } catch { return json({ ok: false, error: '请求格式不对' }, 400); }
+    const r = await setUserLabel({ store, settings: stored, token: url.searchParams.get('u') || '', label: body?.label, now });
+    if (r.ok) return json({ ok: true, label: r.label });
+    const msg = { locked: '已经设置过了，不能再改（需要修改请联系管理员）', empty: '请填写内容', banned: '此链接已停用' }[r.code] || '链接无效';
+    return json({ ok: false, code: r.code, error: msg }, r.code === 'locked' ? 409 : r.code === 'empty' ? 400 : 403);
+  }
+
   if (lower === 'sub') {
     const token = url.searchParams.get('token');
     const generatorMode = isGeneratorRequest(env, url, ua);
@@ -192,7 +207,7 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       // 用户在浏览器里打开自己的链接（只带 u 参数）：给落地页（一键导入 / 二维码 / 复制），不给一堆配置文本。
       // 代理客户端的 UA 不是浏览器，或者带了 target 等格式参数时，照常返回订阅
       if (browserUa && [...url.searchParams.keys()].every((k) => k === 'u')) {
-        return new Response(landingHtml({ siteName: stored.site?.name || 'nicetunnel', subUrl: `${url.protocol}//${url.host}/sub?u=${encodeURIComponent(v.token)}`, name: v.user.name, home: !!stored.preferred?.home?.enabled }), {
+        return new Response(landingHtml({ siteName: stored.site?.name || 'nicetunnel', subUrl: `${url.protocol}//${url.host}/sub?u=${encodeURIComponent(v.token)}`, name: v.user.name, home: !!stored.preferred?.home?.enabled, label: v.user.label, labelSet: !!v.user.labelAt }), {
           status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' },
         });
       }
