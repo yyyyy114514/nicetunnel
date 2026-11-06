@@ -144,24 +144,29 @@ export function qrMatrix(text) {
     g[size - 8][8] = true;
     return g;
   };
+  // 罚分：Worker 免费版每请求只有 10ms CPU，这里要快——用 11 位滑动窗口找 1:1:3:1:1 图形，不拼字符串
   const penalty = (g) => {
     let p = 0;
-    const line = (get) => {
+    for (let dir = 0; dir < 2; dir++) {
       for (let a = 0; a < size; a++) {
-        let run = 1;
-        for (let b = 1; b < size; b++) {
-          if (get(a, b) === get(a, b - 1)) { run++; if (run === 5) p += 3; else if (run > 5) p++; } else run = 1;
-        }
-        for (let b = 0; b + 10 < size; b++) {
-          const s = Array.from({ length: 11 }, (_, i) => (get(a, b + i) ? 1 : 0)).join('');
-          if (s === '10111010000' || s === '00001011101') p += 40;
+        let run = 1, win = 0, prev = false;
+        for (let b = 0; b < size; b++) {
+          const x = dir ? g[b][a] : g[a][b];
+          if (b > 0) { if (x === prev) { run++; if (run === 5) p += 3; else if (run > 5) p++; } else run = 1; }
+          prev = x;
+          win = ((win << 1) | (x ? 1 : 0)) & 0x7ff;
+          if (b >= 10 && (win === 0x5d0 || win === 0x05d)) p += 40; // 10111010000 / 00001011101
         }
       }
-    };
-    line((a, b) => g[a][b]);
-    line((a, b) => g[b][a]);
-    for (let r = 0; r < size - 1; r++) for (let c = 0; c < size - 1; c++) { const x = g[r][c]; if (x === g[r + 1][c] && x === g[r][c + 1] && x === g[r + 1][c + 1]) p += 3; }
-    const dark = g.reduce((s, row) => s + row.filter(Boolean).length, 0);
+    }
+    let dark = 0;
+    for (let r = 0; r < size; r++) {
+      const row = g[r], nx = g[r + 1];
+      for (let c = 0; c < size; c++) {
+        if (row[c]) dark++;
+        if (nx && c < size - 1) { const x = row[c]; if (x === nx[c] && x === row[c + 1] && x === nx[c + 1]) p += 3; }
+      }
+    }
     p += Math.floor(Math.abs((dark * 100) / (size * size) - 50) / 5) * 10;
     return p;
   };
