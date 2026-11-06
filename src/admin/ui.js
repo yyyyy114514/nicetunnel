@@ -6,6 +6,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const CSS = `
 :root{color-scheme:light dark;--bg:#f4f5f9;--bg2:#eceef5;--card:#ffffffcc;--card-s:#fff;--fg:#14161f;--mut:#5c6378;--line:#e2e5ee;--pri:#5b5bf0;--pri2:#8b5cf6;--pri-fg:#fff;--ok:#0a7a50;--warn:#9a5700;--bad:#c9302c;--soft:#eeeefe;--grad:linear-gradient(135deg,#5b5bf0,#8b5cf6);--pri-sh:var(--pri-sh);--ring:#5b5bf02e;--r:16px;--sh:0 1px 2px #1b1f3a0a,0 8px 28px #1b1f3a10;--glow:radial-gradient(900px 420px at 85% -10%,#8b5cf622,transparent 60%),radial-gradient(700px 380px at -5% 0%,#5b5bf01c,transparent 55%)}
 @media (prefers-color-scheme:dark){:root{--bg:#0f0f11;--bg2:#151517;--card:#18181b;--card-s:#1c1c20;--fg:#ececef;--mut:#a0a0ab;--line:#2e2e34;--pri:#a5a1ff;--pri2:#c4a5ff;--ok:#3ecf8e;--warn:#f5a524;--bad:#ff6b6b;--soft:#24242a;--grad:linear-gradient(135deg,#5650d6,#6f4fd0);--pri-sh:#0006;--ring:#a5a1ff33;--sh:0 1px 2px #0005,0 10px 30px #0006;--glow:none}}
+html{overflow-anchor:none} /* 记住滚动位置：异步内容（用户列表等）插进来时不要让浏览器"锚定"把位置挪走 */
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.65 -apple-system,BlinkMacSystemFont,"Inter","SF Pro Text","PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 body{background-image:var(--glow);background-attachment:fixed;min-height:100vh}
 a{color:var(--pri);text-decoration:none}code,pre,.mono{font-family:ui-monospace,SFMono-Regular,"JetBrains Mono",Consolas,monospace;font-size:12.5px}
@@ -80,6 +81,7 @@ main{padding:16px 12px 80px}.card{padding:16px;border-radius:14px}.hero{grid-tem
 .hero .kpis{width:100%;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kpi{padding:12px 14px}.kpi b{font-size:19px}
 .kv{grid-template-columns:100px 1fr}
 input,select,textarea{font-size:16px}input.cb{font-size:14px}
+textarea.mono,input.mono{font-size:16px} /* 小于 16px 时 iPhone 点进输入框会自动放大页面 */
 .card h2{font-size:15px}}
 @media (max-width:640px){
 .tw table.st thead{display:none}
@@ -93,6 +95,35 @@ input,select,textarea{font-size:16px}input.cb{font-size:14px}
 .tw table.st td>input:not([type=checkbox]),.tw table.st td>select{flex:1;min-width:0!important;width:auto!important;max-width:none!important}
 .tw table.st td>.row,.tw table.st td>div{justify-content:flex-end;flex-wrap:wrap}
 .tw table.st td>.cv{display:block;text-align:right;min-width:0}
+/* 账号页：每个号一张紧凑卡片（4 列网格，标签在上）：名称 + Token / 节点域名 / 轮询状态 / 启用 付费 权重 删除 */
+.tw table.st.acc tr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-areas:"n n e p" "h h h h" "s s s s" "t t w d";gap:4px 10px;padding:10px 12px}
+.tw table.st.acc tr:has(.c-pick){grid-template-areas:"k k k k" "n n e p" "h h h h" "s s s s" "t t w d"}
+.tw table.st.acc td{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;gap:3px;padding:2px 0;min-height:0;text-align:left;border:0}
+.tw table.st.acc td::before{max-width:none;font-size:11.5px}
+.tw table.st.acc td>input:not([type=checkbox]){width:100%!important;flex:none;padding:7px 10px}
+.tw table.st.acc td>.cv{text-align:left}.tw table.st.acc td>div{justify-content:flex-start}
+.tw table.st.acc .c-pick{grid-area:k;flex-direction:row}.tw table.st.acc .c-name{grid-area:n}.tw table.st.acc .c-en{grid-area:e}.tw table.st.acc .c-paid{grid-area:p}
+.tw table.st.acc .c-hosts{grid-area:h}.tw table.st.acc .c-stat{grid-area:s}.tw table.st.acc .c-tok{grid-area:t}.tw table.st.acc .c-w{grid-area:w}.tw table.st.acc .c-del{grid-area:d}
+.tw table.st.acc .c-en,.tw table.st.acc .c-paid{align-items:flex-start}.tw table.st.acc .c-en input,.tw table.st.acc .c-paid input{width:20px;height:20px;margin:6px 0 0}
+.tw table.st.acc .c-del{justify-content:flex-end}.tw table.st.acc .c-del .btn{padding:7px 10px}
+.savebar{bottom:10px;padding:10px 12px;flex-wrap:wrap;gap:8px}.savebar .btn{padding:8px 12px}
+/* 用户页：工具条可换行（不再撑出屏幕）；每个用户一张紧凑卡片：勾选 ID 状态 / 名称 / 违规 并行 在线 连接 / 最后在线 链接 */
+.utb>.row{flex-wrap:wrap!important}
+.tw table.st.ul tr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-areas:"k i i s" "n n n n" "v l o c" "t t a a";gap:6px 10px;padding:10px 12px}
+.tw table.st.ul td{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:2px;padding:0;min-height:0;text-align:left;border:0}
+.tw table.st.ul td::before{max-width:none;font-size:11.5px}.tw table.st.ul td>.cv{text-align:left}
+.tw table.st.ul .u-k{grid-area:k;justify-content:center}.tw table.st.ul .u-id{grid-area:i;justify-content:center}.tw table.st.ul .u-id::before{display:none}
+.tw table.st.ul .u-s{grid-area:s;align-items:flex-end;justify-content:center}.tw table.st.ul .u-s::before{display:none}.tw table.st.ul .u-s>.cv{text-align:right}
+.tw table.st.ul .u-n{grid-area:n}.tw table.st.ul .u-n>.cv{width:100%}.tw table.st.ul .u-n input{width:100%!important;max-width:none!important;flex:none}
+.tw table.st.ul .u-v{grid-area:v}.tw table.st.ul .u-l{grid-area:l}.tw table.st.ul .u-o{grid-area:o}.tw table.st.ul .u-c{grid-area:c}
+/* 概览·节点域名状态：域名 状态 / 已用 速度 节奏 / 分配占比 */
+.tw table.st.hs tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-areas:"d d s" "u r p" "a a a";gap:6px 10px;padding:10px 12px}
+.tw table.st.hs td{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:0;min-height:0;text-align:left;border:0}
+.tw table.st.hs td::before{max-width:none;font-size:11.5px}.tw table.st.hs td>.cv{text-align:left}
+.tw table.st.hs .h-h{grid-area:d;justify-content:center;font-weight:600;word-break:break-all}.tw table.st.hs .h-h::before,.tw table.st.hs .h-s::before{display:none}
+.tw table.st.hs .h-s{grid-area:s;align-items:flex-end;justify-content:center}.tw table.st.hs .h-u{grid-area:u}.tw table.st.hs .h-r{grid-area:r}.tw table.st.hs .h-p{grid-area:p}
+.tw table.st.hs .h-a{grid-area:a}.tw table.st.hs .h-a>div{width:100%}
+.tw table.st.ul .u-t{grid-area:t;justify-content:flex-end}.tw table.st.ul .u-a{grid-area:a;align-items:flex-end;justify-content:flex-end}.tw table.st.ul .u-a::before{display:none}
 .tw{margin:0;padding:0}}
 `;
 
@@ -107,6 +138,37 @@ function clientMain() {
   let tab = 'overview';
   try { tab = localStorage.getItem('nt.tab') || 'overview'; } catch {}
   let dirty = false; // 当前设置页有未保存的改动
+  // 浏览进度：每页记住滚动位置（换页、保存后重绘、刷新后都回到原处）
+  let scrollMem = {};
+  try { history.scrollRestoration = 'manual'; } catch {} // 浏览器自带的恢复会和这里打架（刷新后跳到别处）
+  try { scrollMem = JSON.parse(localStorage.getItem('nt.scroll') || '{}') || {}; } catch {}
+  let scrollSaveT = 0, restoring = false, restoreTok = 0;
+  const saveScroll = () => {
+    scrollMem[tab] = Math.round(window.scrollY);
+    clearTimeout(scrollSaveT);
+    scrollSaveT = setTimeout(() => { try { localStorage.setItem('nt.scroll', JSON.stringify(scrollMem)); } catch {} }, 300);
+  };
+  const cancelRestore = () => { restoreTok++; restoring = false; };
+  // 有的页面内容是异步加载的（用户列表等）：页面还不够高时每 100ms 再试，最多 3 秒；用户自己动了就不再拉回去
+  function restoreScroll() {
+    const want = scrollMem[tab] || 0, tok = ++restoreTok;
+    let tries = 0;
+    restoring = true;
+    const step = () => {
+      if (tok !== restoreTok) return;
+      const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+      window.scrollTo(0, Math.min(want, max));
+      if (max < want && tries++ < 30) { setTimeout(step, 100); return; }
+      // 等这次 scrollTo 触发的滚动事件过去再恢复记录，免得记下中间位置
+      setTimeout(() => { if (tok === restoreTok) restoring = false; syncToc(); }, 60); // 不用 requestAnimationFrame：后台标签页里它不触发
+    };
+    step();
+  }
+  for (const ev of ['wheel', 'touchstart', 'keydown', 'mousedown']) window.addEventListener(ev, () => { if (restoring) cancelRestore(); }, { passive: true });
+  // 离开 / 刷新 / 切到后台时立即写一次（滚动事件的防抖可能还没来得及写）
+  const flushScroll = () => { if (restoring) return; scrollMem[tab] = Math.round(window.scrollY); try { localStorage.setItem('nt.scroll', JSON.stringify(scrollMem)); } catch {} };
+  window.addEventListener('pagehide', flushScroll);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushScroll(); });
 
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 2600); }
   async function api(path, method = 'GET', body) {
@@ -452,8 +514,8 @@ function clientMain() {
     <div class="card"><h2><i></i>节点站点（互联）</h2>
       <div class="f" style="margin-bottom:10px"><label>UUID（所有节点站点必须与主站一致）· 来源：${S.uuidSource === 'derived' ? '由 ADMIN + KEY 推导（没有设置合法的 UUID 环境变量）' : '环境变量 UUID'}</label><div class="sub"><input readonly value="${h(S.uuid || '')}"><button class="btn" data-copy="${h(S.uuid || '')}">复制</button></div></div>
       <p class="mut" style="margin:0">每个节点站点只需要：① 上传同一份 <code>_worker.js</code>（可以是旧版本，只要数据面版本不低于 v${S.dataplane?.version ?? 1}）；② 环境变量 <code>UUID</code> 填上面这个（不需要 ADMIN）；③ <b>不要绑定 KV</b>；④ 绑定自己的域名并在「账号」页添加。主站升级通常不需要重新部署节点——在「账号」页点「检测节点」可以看到每个节点的数据面版本。</p></div>
-    <div class="card"><h2><i></i>节点域名状态</h2><div class="tw"><table><thead><tr><th>域名</th><th>状态</th><th>已用 / 预算</th><th>消耗速度</th><th>节奏</th><th style="min-width:160px">分配占比</th></tr></thead><tbody>
-      ${hosts.map((x) => `<tr><td>${h(x.host)}${paidHost(x.host) ? ' <span class="tag" title="Workers Paid：承载地区条目">付费</span>' : ''}${/(^|\.)(pages|workers)\.dev$/i.test(x.host) ? ' <span class="pill p-low" title="Cloudflare 默认分配的域名，中国大陆普遍被干扰（卡、慢、断）。建议绑定自定义域名">默认域名</span>' : ''}</td><td><span class="pill p-${h(x.state)}" title="${h(stateTip(x.state))}">${STATE_CN[x.state] || h(x.state)}</span></td><td>${fmtN(x.used)} / ${fmtN(x.budget)}</td><td>${x.rate ? Math.round(x.rate) + ' /分' : '<span class="mut">-</span>'}</td><td>${paceTxt(x.pace)}</td><td><div class="row" style="flex-wrap:nowrap"><div class="bar"><i style="width:${Math.min(100, (x.sharePct || 0) * 2.5)}%"></i></div><span style="min-width:44px">${(x.sharePct || 0).toFixed(1)}%</span></div></td></tr>`).join('') || '<tr><td colspan="6" class="mut">还没有节点域名：请在「账号」页添加</td></tr>'}
+    <div class="card"><h2><i></i>节点域名状态</h2><div class="tw"><table class="hs"><thead><tr><th>域名</th><th>状态</th><th>已用 / 预算</th><th>消耗速度</th><th>节奏</th><th style="min-width:160px">分配占比</th></tr></thead><tbody>
+      ${hosts.map((x) => `<tr><td class="h-h">${h(x.host)}${paidHost(x.host) ? ' <span class="tag" title="Workers Paid：承载地区条目">付费</span>' : ''}${/(^|\.)(pages|workers)\.dev$/i.test(x.host) ? ' <span class="pill p-low" title="Cloudflare 默认分配的域名，中国大陆普遍被干扰（卡、慢、断）。建议绑定自定义域名">默认域名</span>' : ''}</td><td class="h-s"><span class="pill p-${h(x.state)}" title="${h(stateTip(x.state))}">${STATE_CN[x.state] || h(x.state)}</span></td><td class="h-u">${fmtN(x.used)} / ${fmtN(x.budget)}</td><td class="h-r">${x.rate ? Math.round(x.rate) + ' /分' : '<span class="mut">-</span>'}</td><td class="h-p">${paceTxt(x.pace)}</td><td class="h-a"><div class="row" style="flex-wrap:nowrap"><div class="bar"><i style="width:${Math.min(100, (x.sharePct || 0) * 2.5)}%"></i></div><span style="min-width:44px">${(x.sharePct || 0).toFixed(1)}%</span></div></td></tr>`).join('') || '<tr><td colspan="6" class="mut">还没有节点域名：请在「账号」页添加</td></tr>'}
     </tbody></table></div></div>`;
   }
   function pgNet() {
@@ -470,6 +532,8 @@ function clientMain() {
   }
   // 账号页多选模式（点「多选」才出现复选框与批量操作条）
   let accMulti = false;
+  // 账号页未保存的改动（重绘后保留；保存 / 撤销 / 重新加载后清空）
+  let accDirty = false, accSnap = '[]';
   const accPicked = new Set();
   // Account ID 不再单独占一列：轮询时用 Token 自动发现并回填。只有自动发现失败（Token 读不到账户列表）时才在该行露出输入框
   // 也包括"填过的 ID 与 Token 不属于同一账户"（未找到账户数据），否则隐藏后就没法改了
@@ -479,21 +543,22 @@ function clientMain() {
       if (a.role === 'main') return ''; // 主号在「额度 → 主号额度」里设置
       const tags = (a.role === 'main' ? ' <span class="tag" title="旧版迁移的主站账号：只监控用量，不承载节点">主站</span>' : '');
       const accIdBox = needAccId(a) ? `<div style="margin-top:6px"><input data-k="accountId" value="${h(a.auth?.accountId || '')}" placeholder="自动获取失败：填 32 位 Account ID" style="min-width:220px"></div>` : '';
-      return `<tr data-i="${i}">${accMulti ? `<td><input type="checkbox" data-pick="${i}" ${accPicked.has(i) ? 'checked' : ''}></td>` : ''}<td title="${h(a.auth?.accountId ? 'Account ID：' + a.auth.accountId : 'Account ID：首次轮询自动获取')}"><input data-k="name" value="${h(a.name)}" style="min-width:90px">${tags}</td>
-        <td><input data-k="hosts" value="${h((a.hosts || []).join(','))}" style="min-width:180px"></td>
-        <td style="white-space:normal;min-width:200px">${pollStatus(a)}${accIdBox}</td>
-        <td><input type="checkbox" data-k="enabled" ${a.enabled !== false && a.role !== 'off' ? 'checked' : ''}></td>
-        <td><input type="checkbox" data-k="paid" ${a.paid ? 'checked' : ''} title="该账号开通了 Workers Paid：地区条目只分配给付费账号的域名（Workers Paid 设置在「额度」页）"></td>
-        <td><input data-k="weight" type="number" step="any" value="${h(a.weight)}" style="width:70px"></td>
-        <td><input data-k="apiToken" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore placeholder="${a.auth?.hasToken ? '已设置（留空保持）' : a.auth?.hasKey ? '用 Global Key（留空保持）' : '未设置'}" style="min-width:130px"></td>
-        <td><button class="btn d" data-del="${i}">删除</button></td></tr>`;
+      return `<tr data-i="${i}">${accMulti ? `<td class="c-pick"><input type="checkbox" data-pick="${i}" ${accPicked.has(i) ? 'checked' : ''}></td>` : ''}<td class="c-name" title="${h(a.auth?.accountId ? 'Account ID：' + a.auth.accountId : 'Account ID：首次轮询自动获取')}"><input data-k="name" value="${h(a.name)}" style="min-width:90px">${tags}</td>
+        <td class="c-hosts"><input data-k="hosts" value="${h((a.hosts || []).join(','))}" style="min-width:180px"></td>
+        <td class="c-stat" style="white-space:normal;min-width:200px">${pollStatus(a)}${accIdBox}</td>
+        <td class="c-en"><input type="checkbox" data-k="enabled" ${a.enabled !== false && a.role !== 'off' ? 'checked' : ''}></td>
+        <td class="c-paid"><input type="checkbox" data-k="paid" ${a.paid ? 'checked' : ''} title="该账号开通了 Workers Paid：地区条目只分配给付费账号的域名（Workers Paid 设置在「额度」页）"></td>
+        <td class="c-w"><input data-k="weight" type="number" step="any" value="${h(a.weight)}" style="width:70px"></td>
+        <td class="c-tok"><input data-k="apiToken" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore value="${h(a.auth?.apiToken || '')}" placeholder="${a.auth?.hasToken ? '已设置（留空保持）' : a.auth?.hasKey ? '用 Global Key（留空保持）' : '未设置'}" style="min-width:130px"></td>
+        <td class="c-del"><button class="btn d" data-del="${i}">删除</button></td></tr>`;
     }).join('');
     const cols = accMulti ? 9 : 8;
     const bar = accMulti ? `<div class="row" style="margin-bottom:10px;gap:8px"><label class="row" style="gap:6px;cursor:pointer"><input type="checkbox" id="pickAll" ${S.accounts.some((a) => a.role !== 'main') && accPicked.size === S.accounts.filter((a) => a.role !== 'main').length ? 'checked' : ''}>全选</label><span class="mut">已选 ${accPicked.size} 个</span><span class="sp"></span><button class="btn" id="bEnable">启用</button><button class="btn" id="bDisable">禁用</button><button class="btn" id="bPoll">轮询所选</button><button class="btn d" id="bDel">删除</button></div>` : '';
     return `<div class="card"><h2><i></i>账号<span class="sp"></span><button class="btn" id="addAcc">添加</button><button class="btn${accMulti ? ' p' : ''}" id="multiAcc">${accMulti ? '退出多选' : '多选'}</button><button class="btn" id="pollAcc">轮询</button><button class="btn p" id="saveAcc">保存</button></h2>
-      ${bar}<div class="tw"><table><thead><tr>${accMulti ? '<th></th>' : ''}<th>名称</th><th>节点域名（逗号分隔）</th><th>轮询状态</th><th>启用</th><th title="该账号开通了 Workers Paid">付费</th><th>权重</th><th>API Token</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="${cols}" class="mut">暂无账号</td></tr>`}</tbody></table></div>
+      ${bar}<div class="tw"><table class="acc"><thead><tr>${accMulti ? '<th></th>' : ''}<th>名称</th><th>节点域名（逗号分隔）</th><th>轮询状态</th><th>启用</th><th title="该账号开通了 Workers Paid">付费</th><th>权重</th><th>API Token</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="${cols}" class="mut">暂无账号</td></tr>`}</tbody></table></div>
       <p class="mut">每个账号默认都是节点账号：启用后它的域名参与节点分配，并监控用量；不启用 = 停用。API Token 需要「Account Analytics: Read」权限；Account ID 不用填，首次轮询会用 Token 自动获取并保存（换 Token 后会重新获取）。批量操作（启用 / 禁用 / 删除）立即生效，不需要再点保存。</p>
       <p class="mut" style="margin-top:6px"><b>轮询失败怎么办：</b>① 「账户获取失败 / 未找到账户」是 Token 读不到账户列表——该行会出现 Account ID 输入框，填上 32 位 ID 即可；② 「401/403（auth）」是 Token 无效或没有 Account Analytics: Read 权限；「400」多半是凭据填错（例如浏览器把密码自动填进了 Token 栏），重新粘贴 Token；③ 「过期」是超过 ${S.settings.usage?.staleMinutes ?? 60} 分钟没更新（Pages 没有 Cron：点「轮询」或用脚本定时调用 <code>POST /admin/api/usage/poll</code>）。手动轮询每分钟最多 1 次。</p></div>
+    <div class="savebar" id="accBar" ${accDirty ? '' : 'hidden'}><span id="dirtyN">账号有改动未保存</span><span class="sp"></span><button class="btn" id="accUndo">撤销</button><button class="btn" id="addAcc2">再加一个</button><button class="btn p" id="saveAcc2">保存</button></div>
     <div class="card"><h2><i></i>检测节点<span class="sp"></span><button class="btn" id="nodeCheck">检测全部节点</button></h2>
       <p class="mut" style="margin:0 0 10px">在你的浏览器里直接访问每个节点的 <code>/version</code>，检查：域名是否生效、UUID 是否与主站一致、数据面版本是否落后。每个节点会多 1 次请求（不占主站额度）。</p><div id="nodeOut"></div></div>
     <div class="card"><h2><i></i>批量导入</h2><div class="f"><label>每行：域名,AccountID,APIToken[,名称] 或 域名,邮箱,GlobalKey；也可粘贴旧用量面板的 usage_config.json</label><textarea class="mono" id="impText" placeholder="vp2.example.com,0123456789abcdef0123456789abcdef,token…,二号"></textarea></div>
@@ -603,9 +668,9 @@ function clientMain() {
       const lim = u.effLimit ? u.effLimit + (u.limit == null ? ' <span class="mut">默认</span>' : '') : '不限';
       const online = s ? (s.online ? '<b>' + s.online + '</b>' : '0') + (u.effLimit && s.online > u.effLimit ? ' <span class="pill p-exhausted">超限</span>' : '') : '<span class="mut">-</span>';
       const vio = u.vio ? '<span title="' + h('统计周期从 ' + fmtT(u.vioSince) + ' 起；上次原因：' + (u.banReason || '-')) + '">' + u.vio + ' 次</span>' : '<span class="mut">-</span>';
-      return '<tr><td><input type="checkbox" class="cb" data-upick="' + u.id + '" ' + (U.picked.has(u.id) ? 'checked' : '') + '></td><td class="mono">' + u.id + '</td><td><input data-uname="' + u.id + '" value="' + h(u.name) + '" style="min-width:96px;max-width:150px">' + (u.label ? '<div class="mut" style="font-size:12px;margin-top:3px;white-space:nowrap" title="用户在订阅页自己填写的标识' + (u.labelAt ? '（' + h(fmtT(u.labelAt)) + '）' : '') + '">用户填写：' + h(u.label) + '</div>' : '') + '</td>'
-        + '<td>' + banCell(u) + '</td><td>' + vio + '</td><td style="white-space:nowrap">' + lim + '</td><td>' + online + '</td><td>' + (s && s.conns != null ? fmtN(s.conns) : '<span class="mut">-</span>') + '</td><td style="white-space:nowrap">' + (s && s.lastSeen ? fmtT(s.lastSeen) : '<span class="mut">-</span>') + '</td>'
-        + '<td><div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-copy="' + h(u.sub) + '" title="' + h(u.sub) + '">复制链接</button><a class="btn sm" href="' + h(u.sub) + '" target="_blank" rel="noopener noreferrer" title="用户在浏览器里打开链接看到的页面：各客户端一键导入、二维码">导入页</a></div></td></tr>';
+      return '<tr><td class="u-k"><input type="checkbox" class="cb" data-upick="' + u.id + '" ' + (U.picked.has(u.id) ? 'checked' : '') + '></td><td class="mono u-id">' + u.id + '</td><td class="u-n"><input data-uname="' + u.id + '" value="' + h(u.name) + '" style="min-width:96px;max-width:150px">' + (u.label ? '<div class="mut" style="font-size:12px;margin-top:3px;white-space:nowrap" title="用户在订阅页自己填写的标识' + (u.labelAt ? '（' + h(fmtT(u.labelAt)) + '）' : '') + '">用户填写：' + h(u.label) + '</div>' : '') + '</td>'
+        + '<td class="u-s">' + banCell(u) + '</td><td class="u-v">' + vio + '</td><td class="u-l" style="white-space:nowrap">' + lim + '</td><td class="u-o">' + online + '</td><td class="u-c">' + (s && s.conns != null ? fmtN(s.conns) : '<span class="mut">-</span>') + '</td><td class="u-t" style="white-space:nowrap">' + (s && s.lastSeen ? fmtT(s.lastSeen) : '<span class="mut">-</span>') + '</td>'
+        + '<td class="u-a"><div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-copy="' + h(u.sub) + '" title="' + h(u.sub) + '">复制链接</button><a class="btn sm" href="' + h(u.sub) + '" target="_blank" rel="noopener noreferrer" title="用户在浏览器里打开链接看到的页面：各客户端一键导入、二维码">导入页</a></div></td></tr>';
     }).join('');
     const pages = Math.max(1, Math.ceil(d.matched / d.limit));
     const page = Math.floor(d.offset / d.limit) + 1;
@@ -613,12 +678,12 @@ function clientMain() {
     const allOn = d.users.length && d.users.every((u) => U.picked.has(u.id));
     const durs = [['0', '永久'], ['1', '1 小时'], ['24', '1 天'], ['72', '3 天'], ['168', '7 天'], ['720', '30 天']];
     return '<div class="card"><h2><i></i>用户（' + d.total + (d.banned ? '，封禁中 ' + d.banned : '') + '）<span class="sp"></span><input id="uQ" value="' + h(U.q) + '" placeholder="搜索 ID / 名称 / 标识" style="width:170px"><button class="btn sm" id="uSearch">搜索</button><button class="btn sm" id="uStats">刷新在线</button></h2>'
-      + '<div class="row" style="gap:8px;margin-bottom:12px">'
+      + '<div class="row utb" style="gap:8px;margin-bottom:12px">'
       + '<label class="row" style="gap:6px;cursor:pointer;flex-wrap:nowrap;white-space:nowrap"><input type="checkbox" class="cb" id="uPickAll" ' + (allOn ? 'checked' : '') + '>全选本页</label><span class="mut" style="white-space:nowrap">已选 ' + U.picked.size + ' 个</span><span class="sp"></span>'
       + '<span class="row" style="gap:6px;flex-wrap:nowrap"><select id="uBanDur" style="width:auto" title="封禁时长">' + durs.map(([v, n]) => '<option value="' + v + '">' + n + '</option>').join('') + '</select><button class="btn sm" id="uBan">封禁</button><button class="btn sm" id="uUnban">解封</button><button class="btn sm" id="uResetVio" title="违规次数清零（自动封禁的阶梯从第 1 档重新算）">清零违规</button><button class="btn sm" id="uResetLabel" title="清空用户填写的标识，用户可以在订阅页重新填写一次">重置标识</button></span>'
       + '<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="uSetLimit" type="number" min="0" max="50" placeholder="并行数" style="width:86px"><button class="btn sm" id="uApplyLimit">设并行</button><button class="btn sm" id="uDefLimit">恢复默认</button></span>'
       + '<span class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" id="uCopySel">复制链接</button><button class="btn sm d" id="uDel">删除</button></span></div>'
-      + '<div class="tw"><table><thead><tr><th></th><th>ID</th><th>名称</th><th>状态</th><th title="统计周期内的违规次数（自动封禁阶梯处罚用）">违规</th><th>并行上限</th><th title="最近 5 分钟有连接的不同 IP 数">在线 IP</th><th>24 小时连接</th><th>最后在线</th><th>订阅链接</th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="mut">' + (d.total ? '没有匹配的用户' : '还没有用户：在下面「批量生成」') + '</td></tr>') + '</tbody></table></div>'
+      + '<div class="tw"><table class="ul"><thead><tr><th></th><th>ID</th><th>名称</th><th>状态</th><th title="统计周期内的违规次数（自动封禁阶梯处罚用）">违规</th><th>并行上限</th><th title="最近 5 分钟有连接的不同 IP 数">在线 IP</th><th>24 小时连接</th><th>最后在线</th><th>订阅链接</th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="mut">' + (d.total ? '没有匹配的用户' : '还没有用户：在下面「批量生成」') + '</td></tr>') + '</tbody></table></div>'
       + '<div class="row" style="margin-top:10px;gap:8px"><span class="mut">' + statsNote + '</span><span class="sp"></span><button class="btn sm" id="uPrev" ' + (page <= 1 ? 'disabled' : '') + '>上一页</button><span class="mut">' + page + ' / ' + pages + '</span><button class="btn sm" id="uNext" ' + (page >= pages ? 'disabled' : '') + '>下一页</button></div>'
       + '<p class="mut" style="margin:10px 0 0">并行上限按"同时在线的不同 IP"计（IPv6 按 /64）：超过后，先连上的设备保留，多出来的新连接被拒绝。同一台设备同时有 IPv4 和 IPv6 会算 2 个，手机切换网络时旧 IP 约 5 分钟后释放，所以一个人建议设 2。封禁默认永久，可以在左边选时长；到期自动解封。</p></div>'
       + '<div class="card"><h2><i></i>批量生成</h2>'
@@ -749,12 +814,15 @@ function clientMain() {
     if (!PAGES[tab] || !shown(tab)) tab = 'overview';
     $('nav').innerHTML = Object.entries(PAGES).filter(([k]) => shown(k)).map(([k, [n]]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><svg viewBox="0 0 24 24">${ICONS[k]}</svg><span>${n}</span></button>`).join('');
     const main = $('main');
+    restoring = true; // 换内容时页面高度会变，浏览器跟着改滚动位置——这期间不记录
     main.innerHTML = `<div class="top"><h1>${PAGES[tab][0]}</h1><span class="sub-h">${h(S.host || '')}</span></div>` + PAGES[tab][1]();
     buildToc(main);
     bind(main);
+    stackTables(main); // 立刻排好手机卡片（不等观察器）：恢复滚动位置、滚到新加的账号都要按最终高度算
     // 手机上导航横向滚动：把当前页的按钮滚到看得见的位置（不然靠右的页面按钮会被挤到边缘、被"退出"挡住）
     const nv = $('nav'), cur = nv && nv.querySelector('button.on');
     if (cur && nv.scrollWidth > nv.clientWidth) nv.scrollLeft = Math.max(0, cur.offsetLeft - (nv.clientWidth - cur.offsetWidth) / 2);
+    restoreScroll();
   }
 
   // ---------------- 页内索引 ----------------
@@ -823,6 +891,7 @@ function clientMain() {
   // 滚动时节流更新高亮（最多每 80ms 一次，停下后再补一次）
   let tocAt = 0, tocTimer = 0;
   window.addEventListener('scroll', () => {
+    if (!restoring) saveScroll();
     const now = Date.now();
     clearTimeout(tocTimer);
     if (now - tocAt >= 80) { tocAt = now; syncToc(); }
@@ -842,6 +911,12 @@ function clientMain() {
       root.addEventListener('change', (e) => { if (e.target.closest('[data-p], [data-main]')) refresh(); });
       $('#undoSave', root).addEventListener('click', () => { dirty = false; render(); toast('已撤销改动'); });
     }
+    const accBar = $('#accBar', root);
+    if (accBar) {
+      dirty = accDirty;
+      const mark = (e) => { if (!e.target.closest('table.acc [data-k]')) return; accDirty = dirty = true; accBar.hidden = false; };
+      root.addEventListener('input', mark); root.addEventListener('change', mark);
+    }
     root.querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', run(() => saveSettings(root))));
     root.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
       const v = b.dataset.copy;
@@ -859,11 +934,13 @@ function clientMain() {
     });
     const saveRows = async (list, msg) => { const r = await api('accounts', 'PUT', { accounts: list, mode: 'replace' }); S.accounts = r.accounts; accPicked.clear(); toast(msg); await reload(); };
     const doPoll = async (ids) => {
+      const keep = accDirty && $('table.acc', root) ? readRows() : null; // 账号页有没保存的改动：轮询后不要冲掉
       const r = await api('usage/poll', 'POST', ids ? { ids } : {});
       S.usage = r.usage; S.pool = r.pool;
       const fails = (r.polled || []).filter((p) => !p.ok).length;
       toast('已轮询 ' + (r.polled || []).length + ' 个账号' + (fails ? '，失败 ' + fails + ' 个（看「轮询状态」）' : ''));
       await reload();
+      if (keep) { S.accounts = keep; accDirty = true; render(); }
     };
     on('pollAcc', () => doPoll());
     on('mainPoll', () => { const m = mainAccount(); if (!m || !(m.auth?.hasToken || m.auth?.hasKey)) return toast('先填主号的 API Token 并保存'); return doPoll([m.id]); });
@@ -939,9 +1016,20 @@ function clientMain() {
         out.appendChild(note);
       } catch (e) { toast('检测结果同步失败：' + (e.message || e)); }
     });
-    on('addAcc', () => { S.accounts = readRows().concat([{ id: '', name: '新账号', hosts: [], role: 'node', enabled: true, weight: 1, limit: null, note: '', auth: {} }]); render(); });
-    root.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => { const rows = readRows(); rows.splice(Number(b.dataset.del), 1); S.accounts = rows; accPicked.clear(); render(); toast('已删除，记得保存'); }));
-    on('saveAcc', async () => { const r = await api('accounts', 'PUT', { accounts: readRows(), mode: 'replace' }); S.accounts = r.accounts; toast('已保存'); await reload(); });
+    // 添加：新账号排在最后，加完直接滚到它并聚焦名称；底部保存栏随即出现，不用再滚回顶部点保存
+    const addAcc = () => {
+      S.accounts = readRows().concat([{ id: '', name: '新账号', hosts: [], role: 'node', enabled: true, weight: 1, limit: null, note: '', auth: {} }]);
+      accDirty = true; render(); cancelRestore();
+      const tr = $('tr[data-i="' + (S.accounts.length - 1) + '"]'); if (!tr) return;
+      tr.scrollIntoView({ block: 'center' });
+      const nm = $('[data-k="name"]', tr); if (nm) { nm.focus({ preventScroll: true }); nm.select(); }
+      saveScroll();
+    };
+    on('addAcc', addAcc); on('addAcc2', addAcc);
+    on('accUndo', () => { try { S.accounts = JSON.parse(accSnap); } catch {} accDirty = false; render(); toast('已撤销改动'); });
+    root.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => { const rows = readRows(); rows.splice(Number(b.dataset.del), 1); S.accounts = rows; accPicked.clear(); accDirty = true; render(); toast('已删除，记得保存'); }));
+    const saveAcc = async () => { const r = await api('accounts', 'PUT', { accounts: readRows(), mode: 'replace' }); S.accounts = r.accounts; toast('已保存'); await reload(); };
+    on('saveAcc', saveAcc); on('saveAcc2', saveAcc);
     const imp = async (dryRun) => {
       const r = await api('accounts/import', 'POST', { text: $('#impText', root).value, format: $('#impFmt', root).value, mode: $('#impMode', root).value, dryRun });
       $('#impOut', root).innerHTML = `<p>${dryRun ? '预览' : '已导入'}：新增 ${r.added}，更新 ${r.updated}，共 ${r.accounts.length} 个账号</p>` + (r.errors.length ? `<pre>${h(r.errors.join('\n'))}</pre>` : '');
@@ -1075,6 +1163,7 @@ function clientMain() {
 
   async function reload() {
     S = await api('state');
+    accSnap = JSON.stringify(S.accounts || []); accDirty = false;
     document.body.classList.toggle('simple', !!S.settings.ui?.simpleMode);
     $('#ver').textContent = (S.version ? 'v' + S.version : '') + (S.build ? ' · ' + S.build : '');
     render();
@@ -1084,8 +1173,9 @@ function clientMain() {
     const b = e.target.closest('[data-tab]'); if (!b) return;
     if (b.dataset.tab === tab) return;
     if (dirty && !confirm('这一页有改动还没保存，离开会丢失。确定离开？')) return;
+    if (!restoring) saveScroll(); // 记下离开时的位置
     tab = b.dataset.tab; try { localStorage.setItem('nt.tab', tab); } catch {}
-    window.scrollTo(0, 0); render(); // 先回到顶部再渲染：页内索引的高亮按新页面的位置计算
+    render(); // 渲染后回到这一页上次的位置（restoreScroll），页内索引高亮随之更新
   });
   window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
   reload().catch((e) => { $('main').innerHTML = `<div class="card"><h2><i></i>加载失败</h2><p>${h(e.message)}</p></div>`; });
