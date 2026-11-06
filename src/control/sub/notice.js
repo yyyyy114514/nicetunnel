@@ -46,7 +46,7 @@ export function noticeConfig(format, message) {
 /** 浏览器打开被封禁的链接时的提示页 */
 export function noticeHtml({ siteName, message }) {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>链接已停用</title>
-<style>:root{--bg:#f6f7fb;--card:#fff;--fg:#1d2433;--mut:#6b7385;--line:#e4e7ef}@media (prefers-color-scheme:dark){:root{--bg:#0f1220;--card:#181c2e;--fg:#e8ebf5;--mut:#9aa1b5;--line:#2a3048}}
+<style>:root{--bg:#f6f7fb;--card:#fff;--fg:#1d2433;--mut:#5c6378;--line:#e4e7ef}@media (prefers-color-scheme:dark){:root{--bg:#0f0f11;--card:#18181b;--fg:#ececef;--mut:#a0a0ab;--line:#2e2e34}}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 main{max-width:480px;margin:18vh auto 0;padding:0 16px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;text-align:center}
 .icon{font-size:40px;line-height:1}h1{font-size:20px;margin:10px 0 6px}.mut{color:var(--mut);font-size:13px}</style></head>

@@ -45,8 +45,8 @@ export function landingHtml({ siteName, subUrl, name = '', home = false, labelSe
   const labelCard = labelSet ? '' : `<section class="card" id="lb"><div class="ttl">我的标识<span class="mut">方便管理员认出你，例如昵称或联系方式</span></div><div class="row"><input id="lv" maxlength="30" placeholder="最多 30 字" autocomplete="off"><button id="ls" type="button">提交</button></div><div class="mut" id="lm" style="margin-top:6px">只能设置一次，提交后不能自己修改</div></section>`;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${esc(title)}</title>
 <style>
-:root{--bg:#f6f7fb;--card:#fff;--fg:#1d2433;--mut:#6b7385;--line:#e4e7ef;--pri:#5b5bf0;--okbg:#e9f8ef;--ok:#17803d}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1220;--card:#181c2e;--fg:#e8ebf5;--mut:#9aa1b5;--line:#2a3048;--pri:#8b8bff;--okbg:#12291c;--ok:#5fd28a}}
+:root{--bg:#f6f7fb;--card:#fff;--fg:#1d2433;--mut:#5c6378;--line:#e4e7ef;--pri:#5b5bf0;--okbg:#e9f8ef;--ok:#17803d}
+@media (prefers-color-scheme:dark){:root{--bg:#0f0f11;--card:#18181b;--fg:#ececef;--mut:#a0a0ab;--line:#2e2e34;--pri:#5650d6;--okbg:#14261c;--ok:#3ecf8e}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 main{max-width:560px;margin:0 auto;padding:24px 16px 40px}h1{font-size:22px;margin:0 0 4px}.mut{color:var(--mut);font-size:13px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:16px}
