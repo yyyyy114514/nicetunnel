@@ -31,6 +31,9 @@ test('标识：订阅页有输入框；只能设置一次（第二次 409）；�
   let html = await (await page(u.sub)).text();
   assert.ok(html.includes('id="lv"') && html.includes('只能设置一次'), '有输入框');
   assert.ok(html.includes("method:'PUT'"), '用 PUT 提交（POST 会被数据面当成代理流量）');
+  const js = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  assert.doesNotThrow(() => new Function(js), '页面脚本能解析（之前 confirm 里的换行让整段脚本报错）');
+  assert.ok(html.indexOf('id="lb"') < html.indexOf('class="card a-imp"'), '标识在最上面');
   assert.equal((await put(u.sub, '   ')).status, 400, '空的不行');
   const r1 = await put(u.sub, '张三<script>');
   assert.equal(r1.status, 200);
@@ -38,7 +41,7 @@ test('标识：订阅页有输入框；只能设置一次（第二次 409）；�
   const r2 = await put(u.sub, '李四');
   assert.equal(r2.status, 409, '只能设置一次');
   html = await (await page(u.sub)).text();
-  assert.ok(html.includes('张三script') && !html.includes('id="lv"'), '设置后只显示，不能再填');
+  assert.ok(!html.includes('id="lb"') && !html.includes('id="lv"'), '设置过就不再显示');
   // 后台：列表里有，搜索也能搜到
   const list = await (await admin('/admin/api/users?q=' + encodeURIComponent('张三'), undefined, 'GET')).json();
   assert.equal(list.users[0].label, '张三script');
