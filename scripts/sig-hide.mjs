@@ -33,6 +33,11 @@ export const DOMAIN_KEYWORDS = ['反代', '代理', '链式', '订阅', '伪装'
 export const EDT_KEYWORDS = [...IDENTITY_KEYWORDS, ...PROTOCOL_KEYWORDS, ...RUNTIME_KEYWORDS];
 export const DISGUISE_KEYWORDS = [...EDT_KEYWORDS, ...DOMAIN_KEYWORDS];
 
+// 节点包额外隐藏的协议/机件词（首次审计遗漏项：TURN/SSTP/gRPC/XHTTP 大量出现在注释与字符串里；
+// 木马是 trojan 的中文同义词）。节点包同时启用 stripComments + escapeCjk，注释与明文中文全部清除。
+export const NODE_EXTRA_KEYWORDS = ['turn', 'sstp', 'grpc', 'xhttp', '木马'];
+export const NODE_KEYWORDS = [...DISGUISE_KEYWORDS, ...NODE_EXTRA_KEYWORDS];
+
 // 注释里的身份词 → 中性说法（edt 风格）
 export const COMMENT_REPLACEMENTS = {
   edgetunnel: '上游实现',
@@ -108,18 +113,24 @@ function findHits(text, keywords, rawMode = false) {
   return kept;
 }
 
-/** 命中覆盖的字符位置集合 */
-function maskSet(text, keywords, rawMode = false) {
+/** 命中覆盖的字符位置集合；escapeCjk 时所有中日韩字符位置一并入集（节点包用：不留任何明文中文） */
+function maskSet(text, keywords, rawMode = false, escapeCjk = false) {
   const hits = findHits(text, keywords, rawMode);
-  if (!hits.length) return null;
   const mask = new Set();
+  if (escapeCjk) {
+    const cjk = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/g;
+    let m;
+    while ((m = cjk.exec(text))) { for (let i = m.index; i < m.index + m[0].length; i++) mask.add(i); }
+  }
   for (const h of hits) for (let i = h.start; i < h.end; i++) mask.add(i);
-  return mask;
+  return mask.size ? mask : null;
 }
 
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
+
 /** 把 cooked 字符串值重新输出为字面量；关键词字符转义，其余按需转义。无命中返回 null。 */
-function literalSource(cooked, keywords) {
-  const mask = maskSet(cooked, keywords);
+function literalSource(cooked, keywords, escapeCjk = false) {
+  const mask = maskSet(cooked, keywords, false, escapeCjk);
   if (!mask) return null;
   let out = '"';
   for (let i = 0; i < cooked.length; i++) {
@@ -137,8 +148,8 @@ function literalSource(cooked, keywords) {
 }
 
 /** 正则 pattern 源文本：关键词字符转义，其余原样。无命中返回 null。 */
-function patternSource(pattern, keywords) {
-  const mask = maskSet(pattern, keywords, true);
+function patternSource(pattern, keywords, escapeCjk = false) {
+  const mask = maskSet(pattern, keywords, true, escapeCjk);
   if (!mask) return null;
   let out = '';
   for (let i = 0; i < pattern.length; i++) out += mask.has(i) ? esc(pattern[i]) : pattern[i];
@@ -146,8 +157,8 @@ function patternSource(pattern, keywords) {
 }
 
 /** 模板静态片段 raw 文本：关键词字符 → \uXXXX。无命中返回 null。 */
-function templateRawSource(raw, keywords) {
-  const mask = maskSet(raw, keywords, true);
+function templateRawSource(raw, keywords, escapeCjk = false) {
+  const mask = maskSet(raw, keywords, true, escapeCjk);
   if (!mask) return null;
   let out = '';
   for (let i = 0; i < raw.length; i++) out += mask.has(i) ? esc(raw[i]) : raw[i];
@@ -155,11 +166,36 @@ function templateRawSource(raw, keywords) {
 }
 
 /** 标识符名（属性访问 / 对象键）→ 全转义的字符串字面量。无命中返回 null。 */
-function identifierSource(name, keywords) {
-  if (!findHits(name, keywords).length) return null;
+function identifierSource(name, keywords, escapeCjk = false) {
+  if (!findHits(name, keywords).length && !(escapeCjk && CJK_RE.test(name))) return null;
   let out = '"';
   for (const ch of name) out += esc(ch);
   return out + '"';
+}
+
+/** 移除全部注释：行注释整段删除，块注释替换成单个空格（保 token 分隔）。改后重新解析校验。 */
+function stripCommentsFromCode(code) {
+  const comments = [];
+  try {
+    parse(code, {
+      ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true,
+      onComment: (block, text, start, end) => comments.push({ block, start, end }),
+    });
+  } catch (e) {
+    return { code, error: '解析失败：' + e.message };
+  }
+  if (!comments.length) return { code };
+  let out = code;
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const c = comments[i];
+    out = c.block ? out.slice(0, c.start) + ' ' + out.slice(c.end) : out.slice(0, c.start) + out.slice(c.end);
+  }
+  try {
+    parse(out, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
+  } catch (e) {
+    return { code, error: '注释移除后解析失败，已回退：' + e.message };
+  }
+  return { code: out };
 }
 
 // ---------------- AST 遍历 ----------------
@@ -220,9 +256,15 @@ export function neutralizeComments(code, replacements) {
  */
 export function hideSignatures(code, options = {}) {
   const keywords = options.keywords ?? EDT_KEYWORDS;
+  const escapeCjk = !!options.escapeCjk;
   let work = code;
   let commentHits = 0;
-  if (options.comments !== false) {
+  if (options.stripComments) {
+    // 节点包模式：注释整段移除（不中性化、不保留），防语义级审查
+    const r = stripCommentsFromCode(work);
+    if (r.error) console.error('注释移除跳过：' + r.error);
+    else work = r.code;
+  } else if (options.comments !== false) {
     const r = neutralizeComments(work, options.commentReplacements);
     if (!r.error) { work = r.code; commentHits = r.hits; }
   }
@@ -240,7 +282,7 @@ export function hideSignatures(code, options = {}) {
     // 1) 字符串字面量（跳过指令序言，如 'use strict'——转义会使其失去指令语义）
     if (node.type === 'Literal' && typeof node.value === 'string' && node.raw) {
       if (parent && parent.type === 'ExpressionStatement' && parent.directive) return;
-      const src = literalSource(node.value, keywords);
+      const src = literalSource(node.value, keywords, escapeCjk);
       if (!src) return;
       hits += 1;
       edits.push({ start: node.start, end: node.end, text: src });
@@ -253,7 +295,7 @@ export function hideSignatures(code, options = {}) {
       if (lastSlash <= 0) return;
       const pattern = raw.slice(1, lastSlash);
       const flags = raw.slice(lastSlash + 1);
-      const pat = patternSource(pattern, keywords);
+      const pat = patternSource(pattern, keywords, escapeCjk);
       if (!pat) return;
       hits += 1;
       edits.push({ start: node.start, end: node.end, text: `/${pat}/${flags}` });
@@ -264,7 +306,7 @@ export function hideSignatures(code, options = {}) {
       if (parent && parent.type === 'TaggedTemplateExpression') return;
       for (const quasi of node.quasis) {
         const raw = quasi.value.raw;
-        const src = templateRawSource(raw, keywords);
+        const src = templateRawSource(raw, keywords, escapeCjk);
         if (!src) continue;
         hits += 1;
         edits.push({ start: quasi.start, end: quasi.end, text: src });
@@ -273,7 +315,7 @@ export function hideSignatures(code, options = {}) {
     }
     // 4) 属性访问：env.PROXYIP → env["\x50ROXYIP"]（可选链 ?. 同样处理）
     if (node.type === 'MemberExpression' && !node.computed && node.property.type === 'Identifier') {
-      const src = identifierSource(node.property.name, keywords);
+      const src = identifierSource(node.property.name, keywords, escapeCjk);
       if (!src) return;
       let dotPos = work.lastIndexOf('.', node.property.start);
       // 点号必须紧贴对象之后（普通访问 dotPos === object.end；可选链是 object.end + 1 且前一位是 '?'）
@@ -287,7 +329,7 @@ export function hideSignatures(code, options = {}) {
     }
     // 5) 对象键：{ proxy: v } → { "\x70roxy": v }；简写 { proxy } → { "\x70roxy": proxy }
     if (node.type === 'Property' && !node.computed && node.key.type === 'Identifier') {
-      const src = identifierSource(node.key.name, keywords);
+      const src = identifierSource(node.key.name, keywords, escapeCjk);
       if (!src) return;
       hits += 1;
       const text = node.shorthand ? `${src}: ${node.key.name}` : src;

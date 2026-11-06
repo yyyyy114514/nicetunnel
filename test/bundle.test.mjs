@@ -139,9 +139,15 @@ test('nicetunnel-node.zip：Pages 上传用的极简形态（对齐上游 cfnew�
   assert.ok(files.get('_worker.js').equals(fs.readFileSync(nodeFile)));
   if (files.size === 1) return; // --no-extras 构建
   assert.deepEqual([...files.keys()].sort(), ['LICENSE', '_worker.js'].sort(), '节点包只含 _worker.js 与 LICENSE，不放门面/文档（Pages 高级模式下它们不会被服务）');
-  // worker 内不应出现代理域关键词与平台 API 明文之外的身份证词
+  // worker 内不应出现任何可搜索的特征：身份词、协议词、平台 API 明文、自造标记、中文机件注释
   const code = files.get('_worker.js').toString('utf8');
-  for (const kw of ['edgetunnel', 'cmliu', 'nicetunnel', 'vless://', 'trojan://', 'socks5://', '反代', '代理', '订阅', '伪装', 'cloudflare:sockets', 'WebSocketPair']) {
-    assert.ok(!new RegExp(kw, 'i').test(code), `节点包 worker 不含「${kw}」明文`);
+  for (const kw of ['edgetunnel', 'cmliu', 'nicetunnel', 'vless://', 'trojan://', 'socks5://', '反代', '代理', '订阅', '伪装', 'cloudflare:sockets', 'WebSocketPair',
+    'NT-HOOK', '木马', 'VPN Gate', 'AEAD']) {
+    assert.ok(!new RegExp(kw.replace(' ', '\\s'), 'i').test(code), `节点包 worker 不含「${kw}」明文`);
   }
+  for (const kw of ['turn', 'sstp', 'grpc', 'xhttp']) {
+    assert.ok(!new RegExp(`\\b${kw}\\b`, 'i').test(code), `节点包 worker 不含「${kw}」独立词`);
+  }
+  assert.ok(!/[\u3400-\u9fff]/.test(code), '节点包 worker 无任何明文中文');
+  assert.ok(!/^[\t ]*\/\//m.test(code), '节点包 worker 无行注释（注释整段移除，防语义级审查）');
 });

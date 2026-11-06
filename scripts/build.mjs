@@ -22,7 +22,7 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { obfuscateWorker, mangleIdentifiers } from './obfuscate.mjs';
-import { hideSignatures, EDT_KEYWORDS, DISGUISE_KEYWORDS, COMMENT_REPLACEMENTS, COMMENT_REPLACEMENTS_DISGUISE } from './sig-hide.mjs';
+import { hideSignatures, EDT_KEYWORDS, DISGUISE_KEYWORDS, NODE_KEYWORDS, COMMENT_REPLACEMENTS, COMMENT_REPLACEMENTS_DISGUISE } from './sig-hide.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distDir = path.join(root, 'dist');
@@ -126,7 +126,7 @@ function stripLeadingComments(code) {
   return s;
 }
 
-async function buildCode({ entryName, workerName, label, requireScheduled }) {
+async function buildCode({ entryName, workerName, label, requireScheduled, fullPackage = false }) {
   modules.clear();
   const entry = path.join(root, entryName);
   load(entry);
@@ -148,9 +148,20 @@ async function buildCode({ entryName, workerName, label, requireScheduled }) {
     // 伪装风格：先改名（terser 会按值重排字面量，转义必须放在后面），再全域关键词转义。
     if (withObfuscation) {
       code = await mangleIdentifiers(code);
-      const hidden = hideSignatures(code, { keywords: DISGUISE_KEYWORDS, commentReplacements: COMMENT_REPLACEMENTS_DISGUISE });
-      if (hidden.error) console.error('特征码隐藏跳过：' + hidden.error);
-      else { code = hidden.code; sigStats = { hits: hidden.hits, commentHits: hidden.commentHits ?? 0 }; }
+      if (!fullPackage) {
+        // 节点包（Pages 上传）：在伪装风格基础上更进一步——
+        //   1) 注释整段移除（不中性化：语义级审查照样能读懂改词后的注释）
+        //   2) 全部 CJK 字符转义（词表覆盖不到的 TURN/SSTP/VPN Gate/中文同义词等不再裸奔）
+        //   3) 额外词表 NODE_KEYWORDS（ASCII 协议词）
+        // 尾部长注释照主包追加（见下方 trailer 逻辑），形态与主包一致。
+        const hidden = hideSignatures(code, { keywords: NODE_KEYWORDS, stripComments: true, escapeCjk: true });
+        if (hidden.error) console.error('节点伪装跳过：' + hidden.error);
+        else { code = hidden.code; sigStats = { hits: hidden.hits, stripped: true }; }
+      } else {
+        const hidden = hideSignatures(code, { keywords: DISGUISE_KEYWORDS, commentReplacements: COMMENT_REPLACEMENTS_DISGUISE });
+        if (hidden.error) console.error('特征码隐藏跳过：' + hidden.error);
+        else { code = hidden.code; sigStats = { hits: hidden.hits, commentHits: hidden.commentHits ?? 0 }; }
+      }
     }
   } else if (STYLE === 'edt') {
     // 上游形态：保留注释与可读结构，只隐藏身份/协议特征码。
@@ -228,7 +239,7 @@ function makeZip(files) {
   return Buffer.concat([...locals, cd, end]);
 }
 async function emitTarget({ entryName, workerName, zipName, label, requireScheduled = false, fullPackage = false }) {
-  const built = await buildCode({ entryName, workerName, label, requireScheduled });
+  const built = await buildCode({ entryName, workerName, label, requireScheduled, fullPackage });
   const { code, out, buildId, rawBytes, withObfuscation, obfuscateStats, sigStats, trailerBytes, moduleCount } = built;
   // zip 只使用本项目文件，不夹带上游仓库的 workflows 或大体积占位注释。
   const zipFiles = [{ name: '_worker.js', data: Buffer.from(code, 'utf8') }];
@@ -259,7 +270,9 @@ async function emitTarget({ entryName, workerName, zipName, label, requireSchedu
   if (!withObfuscation) {
     console.log(`[${label}] 隐藏：已跳过（--no-obfuscate）`);
   } else if (STYLE === 'disguise') {
-    console.log(`[${label}] 伪装：标识符改名 + 关键词转义 ${sigStats?.hits ?? 0} 处 + 注释中性化 ${sigStats?.commentHits ?? 0} 处${trailerBytes ? '，含尾部注释 ' + (trailerBytes / 1024).toFixed(0) + ' KB' : ''}`);
+    console.log(fullPackage && sigStats?.commentHits !== undefined
+      ? `[${label}] 伪装：标识符改名 + 关键词转义 ${sigStats?.hits ?? 0} 处 + 注释中性化 ${sigStats?.commentHits ?? 0} 处${trailerBytes ? '，含尾部注释 ' + (trailerBytes / 1024).toFixed(0) + ' KB' : ''}`
+      : `[${label}] 伪装（节点强化）：标识符改名 + 全域转义（含全部中文）${sigStats?.hits ?? 0} 处 + 注释移除${trailerBytes ? '，含尾部注释 ' + (trailerBytes / 1024).toFixed(0) + ' KB' : ''}`);
   } else if (STYLE === 'edt') {
     console.log(`[${label}] 隐藏：特征码转义 ${sigStats?.hits ?? 0} 处 + 注释中性化 ${sigStats?.commentHits ?? 0} 处（注释与结构保留）${trailerBytes ? '，含尾部注释 ' + (trailerBytes / 1024).toFixed(0) + ' KB' : ''}`);
   } else {
