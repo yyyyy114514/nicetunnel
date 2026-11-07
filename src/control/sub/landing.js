@@ -76,7 +76,7 @@ ${gate ? '' : `<div class="lay">
 <section class="card a-imp"><div class="mut" style="margin-bottom:10px">已安装客户端：点一下直接导入</div><div class="grid">${buttons}</div></section>
 ${qr ? `<section class="card a-qr"><div class="mut" style="margin-bottom:10px">用另一台设备的客户端扫码导入</div><div class="qr">${qr}</div></section>` : ''}
 <section class="card a-cp"><div class="mut" style="margin-bottom:8px">或者复制订阅链接，在客户端里手动添加</div><div class="row"><input id="u" readonly value="${esc(subUrl)}"><button id="c" type="button">复制</button></div>
-<ol class="mut"><li>按钮没反应：说明没装这个客户端，或客户端不支持一键导入，用复制链接的方式添加。</li><li>客户端里记得定期"更新订阅"，节点会自动调整。</li></ol></section>
+<ol class="mut"><li>按钮没反应：说明没装这个客户端，或客户端不支持一键导入，用复制链接的方式添加。</li><li>客户端里记得定期"更新订阅"，节点会自动调整。</li>${home ? '<li><b>家宽线路</b>的出口是 VPN Gate 志愿者的家庭网络，由不认识的第三方运营：别用它登录重要账号或传敏感信息（https 网站的内容对方看不到，但能看到你访问了哪些网站）。</li>' : ''}</ol></section>
 </div>`}
 </main><script>${PAGE_JS}</script>
 </body></html>`;

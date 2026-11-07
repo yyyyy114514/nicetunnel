@@ -170,3 +170,16 @@ test('countingFetch：超出预算的请求直接失败，不调用真正的 fet
   assert.equal(real, 2);
   assert.equal(f.left(), 0);
 });
+
+test('N5：节点列表最多解析 2000 条（审计给的最坏正则 + 2MB 列表也只卡几百毫秒以内）', async () => {
+  const { parseNodeList, MAX_LIST_LINES, regexRisk } = await import('../src/lib/pool-parse.js');
+  const re = '^.*.*.*!';
+  assert.equal(regexRisk(re), '', '这条能通过安全检查（多项式级）');
+  const line = '1.2.3.4:443#' + 'a'.repeat(60) + '$socks5://u:p@5.6.7.8:1080';
+  const big = Array.from({ length: Math.ceil(2e6 / line.length) }, () => line).join('\n');
+  const t = performance.now();
+  const r = parseNodeList(big, re);
+  const ms = performance.now() - t;
+  assert.equal(r.total, MAX_LIST_LINES);
+  assert.ok(ms < 1000, '耗时 ' + Math.round(ms) + 'ms');
+});

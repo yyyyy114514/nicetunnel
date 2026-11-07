@@ -22,6 +22,9 @@ const MAX_QUANTIFIERS = 3;
 const MAX_ALTERNATIONS = 3;
 /** 节点名称参与正则匹配的最大长度（名称本来就短；限制长度让最坏情况的回溯也有上限） */
 export const MAX_REGION_NAME_LEN = 64;
+/** 列表最多处理多少条节点行：每行一次地区正则匹配，安全子集里最坏仍是多项式级（实测 5000 行约 1.4 秒，
+ *  期间这个 isolate 上的连接都会卡住）。gate 之类的列表通常几百条，2000 足够 */
+export const MAX_LIST_LINES = 2000;
 
 /** 数一个（已去掉转义和字符类的）正则里有几个量词 */
 function countQuantifiers(flat) {
@@ -89,12 +92,13 @@ export function extractRegion(name, regionRe) {
 export function parseNodeList(text, regionRe) {
   const groups = new Map();
   const entryMap = new Map();
-  let total = 0;
+  let total = 0, seen = 0;
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith('#') || line.startsWith(';') || line.startsWith('//')) continue;
     const cm = line.match(CHAIN_RE);
     if (!cm) continue;
+    if (++seen > MAX_LIST_LINES) break; // 超出的不再解析（不做正则匹配）
     const before = line.slice(0, cm.index).trim();
     const after = line.slice(cm.index + cm[0].length).trim();
     // 名称：优先 `入口#名称$链式` 里 # 之后；其次链式后面的 #名称

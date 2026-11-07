@@ -61,4 +61,5 @@ http.createServer(async (req, res) => {
     res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
     res.end(String(e?.stack || e));
   }
-}).listen(port, () => console.log(`nicetunnel 本地预览：http://localhost:${port}/login`));
+  // 只听本机：默认密码是 dev-admin，听所有网卡的话同一局域网的人都能登录
+}).listen(port, '127.0.0.1', () => console.log(`nicetunnel 本地预览：http://localhost:${port}/login`));

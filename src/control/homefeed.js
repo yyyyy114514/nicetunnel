@@ -56,12 +56,26 @@ export const isOfficial = (host, operator) => /^public-vpn-/i.test(host || '') |
  * 解析 VPN Gate 的 CSV（*vpn_servers / #HostName,IP,Score,… / 每行最后一列是 base64 的 OpenVPN 配置）。
  * @returns {{entries:{cc:string, ip:string, port:number, score:number}[], pems:{ca:string, cert:string, key:string}, cipher:string, auth:string}}
  */
+const PEM_VOTES = 3;
+/** 证书投票：一样的（CA + 客户端证书 + 私钥 + 加密参数）最多的那组；都不一样时取评分最高的那条 */
+export function pickPems(votes) {
+  if (!votes.length) return null;
+  const keyOf = (v) => [v.ca, v.cert, v.key, v.cipher, v.auth].join('|');
+  const count = new Map();
+  for (const v of votes) count.set(keyOf(v), (count.get(keyOf(v)) || 0) + 1);
+  const best = Math.max(...count.values());
+  if (best >= 2) return votes.find((v) => count.get(keyOf(v)) === best);
+  return votes.slice().sort((a, b) => b.score - a.score)[0];
+}
+
 export function parseVpnGate(text, { max = 40, excludeOfficial = true } = {}) {
   const entries = [];
   let pems = null, cipher = '', auth = '';
+  const votes = [];
   const s = String(text || '');
   // 免费版 Cron 只有 10ms CPU：不把 1.3MB 文本拆成数组，按位置取字段；每条只解码 base64 的开头
-  // （proto / remote 在前约 2.5KB 里），完整解码只做一次（取证书；所有服务器共用同一份 CA 和客户端证书）
+  // （proto / remote 在前约 2.5KB 里）。证书：所有服务器本来共用同一份 CA 和客户端证书，但列表由志愿者服务器上报，
+  // 只取第一条的话，一台恶意服务器排在最前就能让所有家宽节点握手失败——所以取前 3 条投票，至少两条一致才用
   for (let at = 0; at < s.length;) {
     let end = s.indexOf('\n', at);
     if (end < 0) end = s.length;
@@ -84,16 +98,17 @@ export function parseVpnGate(text, { max = 40, excludeOfficial = true } = {}) {
     const remote = lineOf(head, 'remote').split(/\s+/);
     const ip = remote[0], port = Number(remote[1]);
     if (!/^[\d.]+$|^[0-9a-f:]+$/i.test(ip || '') || !(port >= 1 && port <= 65535)) continue;
-    if (!pems) {
+    if (votes.length < PEM_VOTES) {
       const cfg = decodeB64(b64);
-      pems = { ca: pemOf(cfg, 'ca'), cert: pemOf(cfg, 'cert'), key: pemOf(cfg, 'key') };
-      cipher = lineOf(cfg, 'cipher') || 'AES-128-CBC';
-      auth = lineOf(cfg, 'auth') || 'SHA1';
-      if (!pems.ca) { pems = null; continue; }
+      const v = { ca: pemOf(cfg, 'ca'), cert: pemOf(cfg, 'cert'), key: pemOf(cfg, 'key'), cipher: lineOf(cfg, 'cipher') || 'AES-128-CBC', auth: lineOf(cfg, 'auth') || 'SHA1', score: Number(score) || 0 };
+      if (!v.ca) continue;
+      votes.push(v);
     }
     entries.push({ cc: String(cc || '').toUpperCase().slice(0, 2) || '??', ip, port, score: Number(score) || 0 });
   }
   entries.sort((a, b) => b.score - a.score);
+  const win = pickPems(votes);
+  if (win) { pems = { ca: win.ca, cert: win.cert, key: win.key }; cipher = win.cipher; auth = win.auth; }
   return { entries: entries.slice(0, max), pems: pems || { ca: '', cert: '', key: '' }, cipher, auth };
 }
 

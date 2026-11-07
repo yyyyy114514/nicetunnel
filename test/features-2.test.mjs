@@ -96,6 +96,22 @@ function vgCsv() {
     '*'].join('\r\n');
 }
 
+test('家宽：证书取前 3 条投票——排在最前的一台服务器给了别的证书，也不会让所有节点用它', async () => {
+  const { parseVpnGate, pickPems } = await import('../src/control/homefeed.js');
+  const evil = (cfg) => cfg.replace(`<ca>\n${PEM('CERTIFICATE')}`, `<ca>\n${PEM('EVIL')}`);
+  const row = (ip, score, cfg) => ['vpn' + score, ip, score, 10, 1e8, 'X', 'JP', 5, 1000, 100, 1e9, '2weeks', 'home', '', btoa(cfg)].join(',');
+  const csv = ['*vpn_servers', '#HostName,...',
+    row('9.9.9.9', 9e6, evil(vgConfig('tcp', '9.9.9.9', 443))),
+    row('8.8.8.8', 8e6, vgConfig('tcp', '8.8.8.8', 443)),
+    row('7.7.7.7', 7e6, vgConfig('tcp', '7.7.7.7', 443)), '*'].join('\r\n');
+  const r = parseVpnGate(csv);
+  assert.ok(r.pems.ca.includes('BEGIN CERTIFICATE') && !r.pems.ca.includes('EVIL'));
+  assert.equal(r.entries.length, 3, '节点本身照常保留（证书不对的那台握手失败，自动选择会绕开）');
+  // 三条都不一样：取评分最高的
+  assert.equal(pickPems([{ ca: 'a', score: 1 }, { ca: 'b', score: 3 }, { ca: 'c', score: 2 }]).ca, 'b');
+  assert.equal(pickPems([]), null);
+});
+
 test('家宽：解析 VPN Gate 列表——只留 TCP、去掉自营机房、证书只存一份；Clash 里节点经家宽前置连过去', async () => {
   const { parseVpnGate, addHomeToClash } = await import('../src/control/homefeed.js');
   const r = parseVpnGate(vgCsv(), { max: 10 });
