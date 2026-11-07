@@ -61,26 +61,49 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
     await kv.put(key, typeof value === 'string' ? value : JSON.stringify(value));
   }
 
-  /** 带 TTL 的读缓存 */
+  /** 带 TTL 的读缓存。ttlMs 也是这次能接受的最长缓存时间：传 0 就一定读 KV（别处缓存了 30 秒也不用） */
   async function cached(key, ttlMs, loader) {
     const hit = memo.get(key);
     const t = now();
-    if (hit && hit.exp > t) return hit.v;
+    if (hit && hit.exp > t && ttlMs > 0 && t - (hit.at ?? -Infinity) < ttlMs) return hit.v;
     let v;
     try { v = await loader(); } catch (e) {
       // KV 暂时读不到：有旧缓存就先用旧的（10 秒后再试），没有才报错
-      if (hit) { memo.set(key, { v: hit.v, exp: t + 10e3 }); return hit.v; }
+      if (hit) { memo.set(key, { v: hit.v, at: t, exp: t + 10e3 }); return hit.v; }
       throw e;
     }
-    memo.set(key, { v, exp: t + ttlMs });
+    memo.set(key, { v, at: t, exp: t + ttlMs });
     return v;
   }
-  const setMemo = (key, v, ttlMs) => memo.set(key, { v, exp: now() + ttlMs });
+  const setMemo = (key, v, ttlMs) => { const t = now(); memo.set(key, { v, at: t, exp: t + ttlMs }); };
 
   async function getJson(key, ttlMs = 30e3) { return cached(key, ttlMs, () => rawGet(key, 'json')); }
   async function getText(key, ttlMs = 30e3) { return cached(key, ttlMs, () => rawGet(key, 'text')); }
   async function putJson(key, val, ttlMs = 30e3) { await rawPut(key, val); setMemo(key, val, ttlMs); }
   async function putText(key, val, ttlMs = 30e3) { await rawPut(key, String(val)); setMemo(key, String(val), ttlMs); }
+  /** 写 JSON 并带上 KV 元数据（listMeta 一次 list 就能读到，不用逐个 get）；同时让这个前缀的 list 缓存失效 */
+  async function putJsonMeta(key, val, metadata, ttlMs = 30e3) {
+    if (!kvBound) throw new Error('未绑定 KV');
+    countWrite();
+    await kv.put(key, JSON.stringify(val), { metadata });
+    setMemo(key, val, ttlMs);
+    for (const k of [...memo.keys()]) if (k.startsWith('list:') && key.startsWith(k.slice(5))) memo.delete(k);
+  }
+  /** 前缀下所有键的元数据 {键名: metadata}。KV list 每次最多 1000 个键；免费版每天 1000 次 list，所以带缓存 */
+  async function listMeta(prefix, ttlMs = 30e3) {
+    return cached('list:' + prefix, ttlMs, async () => {
+      const out = {};
+      if (!kvBound || typeof kv.list !== 'function') return out;
+      let cursor;
+      for (let i = 0; i < 20; i++) {
+        const r = await kv.list({ prefix, ...(cursor ? { cursor } : {}) });
+        for (const k of r?.keys || []) out[k.name] = k.metadata ?? null;
+        if (r?.list_complete !== false || !r.cursor) break;
+        cursor = r.cursor;
+      }
+      return out;
+    });
+  }
 
   // ---------------- settings（含首次迁移） ----------------
   async function loadSettings() {
@@ -226,7 +249,7 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
     getUsage, saveUsage, getPersistedUsage,
     getLogs, appendLog, flushLogs, clearLogs,
     getAuthSecret,
-    getJson, putJson, getText, putText,
+    getJson, putJson, getText, putText, putJsonMeta, listMeta,
     writesToday: () => (state.day === utcDay(now()) ? state.writes : 0),
     invalidate: (key) => (key ? memo.delete(key) : memo.clear()),
     /** 原始 KV（给规则模块等需要直接 get/put 的地方；写入仍计数） */

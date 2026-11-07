@@ -3,9 +3,11 @@ import { jsonResponse, errorResponse } from '../control/auth.js';
 import {
   MU_KEYS, MAX_BATCH, getUsers, saveUsers, makeUsers, getMuSecret, userSubUrl, effectiveLimit,
   cfAccountIdOf, setupAccount, accountReady, syncUsers, userStats, normalizeUser, runAutoBan,
+  getLabelMap, getLabelRec, withLabel, putLabel,
 } from '../control/users.js';
 import { banActive, banUser, unbanUser, banNotice } from '../control/autoban.js';
 import { redactSecrets } from '../control/notify.js';
+import { subrequestBudget } from '../control/usage.js';
 
 const PAGE_MAX = 200;
 
@@ -58,7 +60,9 @@ export function createUsersRoutes(readJson) {
       const q = String(u.searchParams.get('q') || '').trim().toLowerCase();
       const offset = Math.max(0, Number(u.searchParams.get('offset')) || 0);
       const limit = Math.max(1, Math.min(PAGE_MAX, Number(u.searchParams.get('limit')) || 100));
-      const all = await getUsers(c.store);
+      // 用户自己填的标识单独存放（nt.ul.<id>），这里合并进来显示、搜索
+      const [base, labels] = await Promise.all([getUsers(c.store), getLabelMap(c.store)]);
+      const all = base.map((x) => withLabel(x, labels.get(x.id)));
       const filtered = q ? all.filter((x) => x.id.includes(q) || x.name.toLowerCase().includes(q) || (x.label || '').toLowerCase().includes(q)) : all;
       const page = filtered.slice().reverse().slice(offset, offset + limit); // 新建的在前
       return jsonResponse({
@@ -75,7 +79,7 @@ export function createUsersRoutes(readJson) {
       const { body, error } = await readJson(ctx.request); if (error) return error;
       const count = Number(body.count);
       if (!Number.isFinite(count) || count < 1 || count > MAX_BATCH) return errorResponse(400, 'invalid', `数量必须是 1~${MAX_BATCH}`);
-      const all = await getUsers(c.store);
+      const all = await getUsers(c.store, 0); // 读最新的再整表写回，不用缓存覆盖别处刚做的改动
       let made;
       try { made = makeUsers(all, { count, prefix: body.prefix, limit: body.limit, now: c.now, needLabel: !!c.settings.users?.requireLabel }); } catch (e) { return errorResponse(400, e.code || 'invalid', e.message); }
       await saveUsers(c.store, all.concat(made));
@@ -87,7 +91,7 @@ export function createUsersRoutes(readJson) {
       const { body, error } = await readJson(ctx.request); if (error) return error;
       const ids = pickIds(body);
       if (!ids.size) return errorResponse(400, 'invalid', '没有选中用户');
-      const all = await getUsers(c.store);
+      const all = await getUsers(c.store, 0);
       let n = 0;
       const next = all.map((u) => {
         if (!ids.has(u.id)) return u;
@@ -104,6 +108,10 @@ export function createUsersRoutes(readJson) {
         return normalizeUser(v) || u;
       });
       await saveUsers(c.store, next);
+      if (body.resetLabel === true) {
+        // 逐个读最新的（KV list 最多可能晚 60 秒），只给真的填过的人写
+        await Promise.all([...ids].map(async (id) => { if ((await getLabelRec(c.store, id, 0))?.at > 0) await putLabel(c.store, id, '', 0); }));
+      }
       const push = await pushNow(c);
       return jsonResponse({ ok: true, updated: n, push });
     },
@@ -111,7 +119,9 @@ export function createUsersRoutes(readJson) {
     'POST users/autoban/run': async (ctx, c) => {
       const off = needOn(c); if (off) return off;
       const [accounts, usage] = await Promise.all([c.store.getAccounts(), c.store.getUsage()]);
-      const r = await runAutoBan({ store: c.store, settings: c.settings, accounts, usage, fetchFn: c.fetchFn, now: c.now, force: true, mainAe: !!(ctx.env && ctx.env.NT_AE) });
+      const r = await runAutoBan({ store: c.store, settings: c.settings, accounts, usage, fetchFn: c.fetchFn, now: c.now, force: true, mainAe: !!(ctx.env && ctx.env.NT_AE),
+        // 后台请求同样有子请求上限：给之后的下发留出每个账号 1 个
+        budget: subrequestBudget(c.settings) - 22 });
       const push = r.banned.length ? await pushNow(c) : null;
       return jsonResponse({ ok: true, ...r, push });
     },
@@ -119,7 +129,7 @@ export function createUsersRoutes(readJson) {
       const { body, error } = await readJson(ctx.request); if (error) return error;
       const ids = pickIds(body);
       if (!ids.size) return errorResponse(400, 'invalid', '没有选中用户');
-      const all = await getUsers(c.store);
+      const all = await getUsers(c.store, 0);
       const next = all.filter((u) => !ids.has(u.id));
       await saveUsers(c.store, next);
       const push = await pushNow(c);

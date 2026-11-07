@@ -29,7 +29,7 @@ f.onkeydown=function(e){if(e.key==='Enter')b.click()};
 b.onclick=function(){var v=f.value.trim();if(!v){m.textContent='请填写内容';f.focus();return}
 if(!confirm('确定把标识设置为「'+v+'」吗？\n只能设置一次，提交后不能自己修改。'))return;b.disabled=true;m.textContent='提交中…';
 fetch('/sub/label'+location.search,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:v})}).then(function(r){return r.json()}).then(function(j){
-if(j.ok){var s=document.getElementById('lb');if(s.getAttribute('data-gate')){m.textContent='已设置，正在打开订阅…';location.reload();return}s.textContent='标识已设置：'+j.label;s.className='card ok';setTimeout(function(){s.remove()},4000)}
+if(j.ok){var s=document.getElementById('lb');if(s.getAttribute('data-gate')){m.textContent='已设置，正在刷新…';location.reload();return}s.textContent='标识已设置：'+j.label;s.className='card ok';setTimeout(function(){s.remove()},4000)}
 else{m.textContent=j.error||'提交失败';b.disabled=false}}).catch(function(){m.textContent='网络错误，请稍后再试';b.disabled=false})}})();`;
 
 /**

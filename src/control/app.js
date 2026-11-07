@@ -13,7 +13,7 @@ import { detectIsp } from '../lib/isp.js';
 import { UUID_RE } from './identity.js';
 import { handleLogin, handleLogout, requireAuth, isAuthed, bearerToken, safeEqual } from './auth.js';
 import { trackRequest } from './logs.js';
-import { verifySubToken, readyAccountSet, setUserLabel, labelPending } from './users.js';
+import { verifySubToken, readyAccountSet, setUserLabel, labelPending, getLabelRec, withLabel } from './users.js';
 import { landingHtml } from './sub/landing.js';
 import { noticeConfig, noticeHtml } from './sub/notice.js';
 import { banNotice } from './autoban.js';
@@ -201,6 +201,9 @@ export async function handleMain({ request, env, ctx, url, identity }) {
       if (!v.ok) return camouflage(request, url, env.URL || 'nginx');
       // 填写标识才开订阅：还没填时，浏览器只给填写标识的页面；客户端拿到一份只有"提示语占位节点"的配置（规则全直连），
       // 和被封禁时一样，用户在节点列表里就能看到要做什么。填好后客户端下次更新就是正常订阅
+      // 标识单独存放（nt.ul.<id>）：只有要用到的时候才读——浏览器打开（决定显不显示填写框）、或这个用户要先填标识才能用
+      const onlyU = [...url.searchParams.keys()].every((k) => k === 'u');
+      if (!v.user.labelAt && (v.user.needLabel || (browserUa && onlyU))) v.user = withLabel(v.user, await getLabelRec(store, v.user.id, browserUa ? 0 : 5e3));
       if (labelPending(v.user)) {
         if (rateLimited(ip, stored.sub.rateLimitPerMinute, now)) return new Response('请求过于频繁，请稍后再试', { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain; charset=utf-8' } });
         const msg = stored.users?.needLabelMessage || '未添加标识信息，浏览器打开订阅链接填写信息后即可使用订阅';

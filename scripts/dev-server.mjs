@@ -8,8 +8,10 @@ const { default: worker } = await import(pathToFileURL(fileURLToPath(new URL('..
 const mem = new Map();
 const KV = {
   async get(k, o) { const v = mem.get(k); if (v == null) return null; return (o?.type || o) === 'json' ? JSON.parse(v) : v; },
-  async put(k, v) { mem.set(k, String(v)); },
+  async put(k, v, o) { mem.set(k, String(v)); if (o?.metadata !== undefined) metaOf.set(k, o.metadata); },
+  async list({ prefix = '' } = {}) { return { keys: [...mem.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name, metadata: metaOf.get(name) })), list_complete: true }; },
 };
+const metaOf = new Map();
 const env = { KV, ADMIN: process.env.ADMIN || 'dev-admin', KEY: 'dev' };
 
 // 演示数据：12 个账号、不同消耗速度（DEV_SEED=0 关闭）

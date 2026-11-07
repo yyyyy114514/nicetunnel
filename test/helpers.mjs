@@ -9,8 +9,20 @@ export function memKV(init = {}) {
   const kv = {
     reads: 0, writes: 0, m,
     async get(k, opt) { kv.reads++; const v = m.get(k); if (v == null) return null; return opt?.type === 'json' || opt === 'json' ? JSON.parse(v) : v; },
-    async put(k, v) { kv.writes++; m.set(k, String(v)); },
+    async put(k, v, opt) { kv.writes++; m.set(k, String(v)); if (opt?.metadata !== undefined) meta.set(k, opt.metadata); else meta.delete(k); },
+    // 和 Cloudflare KV 一样：每次最多 limit 个（默认 1000），按键名排序，带 cursor 翻页
+    lists: 0, meta: null,
+    async list({ prefix = '', cursor, limit = 1000 } = {}) {
+      kv.lists++;
+      const names = [...m.keys()].filter((k) => k.startsWith(prefix)).sort();
+      const start = cursor ? Number(cursor) : 0;
+      const page = names.slice(start, start + limit);
+      const done = start + limit >= names.length;
+      return { keys: page.map((name) => ({ name, metadata: meta.get(name) })), list_complete: done, ...(done ? {} : { cursor: String(start + limit) }) };
+    },
   };
+  const meta = new Map();
+  kv.meta = meta;
   return kv;
 }
 

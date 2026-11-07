@@ -7,6 +7,8 @@
 //   nt.mu.accounts  各节点账号的配置结果 {账号id: {cfId, nsId, project, bound, manual, err, at}}
 //   nt.mu.state     下发状态 + 同步记录（主站自己的数据面直接读这里；节点账号 KV 里只有状态部分）
 //                   {v, on, key, ids, over, sig, at, overAt, pushed:{账号id: sig}, errors, day, writes, pushN}
+//   nt.ul.<id>      用户自己填写的标识 {label, at}（元数据里同样一份，后台一次 list 读全）。单独存放：用户触发的写入不碰 nt.users
+//   nt.mu.tick      每分钟 Cron 触发器在用的时间标记（最多每小时写一次）
 import {
   MU_STATE_KEY, MU_KV_BINDING, MU_AE_BINDING, MU_KV_TITLE, MU_DATASET, MU_ONLINE_WINDOW_MIN,
   newUserId, newSecret, userUuid, userSubToken, userSubSig, parseSubToken, nodeKeyOf,
@@ -17,7 +19,8 @@ import { safeEqual } from './auth.js';
 import { banActive, banUser, evaluateRules, aggregateRows, ruleWindows, cutoffOf, nodeAggSql, subAggSql, hitReason } from './autoban.js';
 
 // sync 与下发状态合成一个键：每次变化主站只写一次 KV
-export const MU_KEYS = { users: 'nt.users', secret: 'nt.mu.secret', accounts: 'nt.mu.accounts', sync: MU_STATE_KEY };
+// nt.ul.<id>：用户自己填写的标识（单独的键，见 setUserLabel）；nt.mu.tick：每分钟触发器在用的标记（见 cron.js）
+export const MU_KEYS = { users: 'nt.users', secret: 'nt.mu.secret', accounts: 'nt.mu.accounts', sync: MU_STATE_KEY, labelPrefix: 'nt.ul.', minuteTick: 'nt.mu.tick' };
 export const MAX_USERS = 5000;
 export const MAX_BATCH = 500;
 export const MAX_LIMIT = 50;
@@ -43,12 +46,36 @@ export async function setUserLabel({ store, settings, token, label, now = Date.n
   if (!v.ok) return { ok: false, code: v.code };
   const text = cleanLabel(label);
   if (!text) return { ok: false, code: 'empty' };
-  const all = await getUsers(store);
-  const u = all.find((x) => x.id === v.user.id);
-  if (!u) return { ok: false, code: 'bad_token' };
-  if (u.labelAt) return { ok: false, code: 'locked', label: u.label };
-  await saveUsers(store, all.map((x) => (x.id === u.id ? { ...x, label: text, labelAt: now } : x)));
+  // 只写这个用户自己的键，不碰 nt.users：用户能触发的写入如果整表写回（用的又是缓存），
+  // 会冲掉管理员 / 自动封禁刚做的改动（解封别人、删掉刚建的用户）
+  const cur = withLabel(v.user, await getLabelRec(store, v.user.id, 0));
+  if (cur.labelAt) return { ok: false, code: 'locked', label: cur.label };
+  await putLabel(store, v.user.id, text, now);
   return { ok: true, label: text };
+}
+
+// ---- 用户标识的存储：每人一个键 nt.ul.<id> = {label, at}；同样的内容放进 KV 元数据，后台一次 list 就能拿到全部 ----
+// at = 0 表示被后台重置（覆盖旧版写在 nt.users 里的标识）
+export const labelKey = (id) => MU_KEYS.labelPrefix + id;
+export async function getLabelRec(store, id, ttlMs = 30e3) {
+  const r = await store.getJson(labelKey(id), ttlMs);
+  return r && typeof r === 'object' ? r : null;
+}
+export async function putLabel(store, id, label, at) {
+  const text = cleanLabel(label), t = Math.max(0, Math.round(Number(at) || 0));
+  await store.putJsonMeta(labelKey(id), { label: text, at: t }, { l: text, a: t });
+}
+/** 全部用户的标识（id → {label, at}）：KV list 的元数据，每 1000 个键一次 list */
+export async function getLabelMap(store, ttlMs = 30e3) {
+  const raw = await store.listMeta(MU_KEYS.labelPrefix, ttlMs);
+  const out = new Map();
+  for (const [name, m] of Object.entries(raw || {})) if (m && typeof m === 'object') out.set(name.slice(MU_KEYS.labelPrefix.length), { label: m.l, at: m.a });
+  return out;
+}
+/** 把单独存的标识合到用户上（没有单独的键时保留 nt.users 里旧版的值） */
+export function withLabel(u, rec) {
+  if (!u || !rec) return u;
+  return { ...u, label: cleanLabel(rec.label), labelAt: Math.max(0, Math.round(Number(rec.at) || 0)) };
 }
 
 /** 还没填标识、订阅被挡着（只有「填写标识才开订阅」开启期间生成的用户才会这样） */
@@ -73,7 +100,8 @@ export const normalizeUsers = (list) => {
   return (Array.isArray(list) ? list : []).map(normalizeUser).filter((u) => u && !seen.has(u.id) && seen.add(u.id));
 };
 
-export async function getUsers(store) { return normalizeUsers(await store.getJson(MU_KEYS.users, 30e3)); }
+/** ttlMs：读缓存时长。要改了再整表写回的地方传 0（读最新的），否则会用旧缓存覆盖别处刚做的改动 */
+export async function getUsers(store, ttlMs = 30e3) { return normalizeUsers(await store.getJson(MU_KEYS.users, ttlMs)); }
 export async function saveUsers(store, list) { const n = normalizeUsers(list); await store.putJson(MU_KEYS.users, n, 30e3); return n; }
 
 /** 生成一批用户（名字：前缀 + 序号） */
@@ -451,9 +479,12 @@ const mainAccountOf = (accounts, usage) => (accounts || []).find((a) => a.role =
  * 按窗口查一组账号，合并成 窗口小时数 → 用户 → 聚合。刚封禁 / 解封过的用户只算之后的数据：单独查（每次最多几个），
  * 超出的这次先不判断。
  */
-async function collectAgg({ windows, accounts, usage, users, fetchFn, now, sqlOf, errors }) {
+async function collectAgg({ windows, accounts, usage, users, fetchFn, now, sqlOf, errors, quota = { left: Infinity }, skipped = [] }) {
   const out = new Map();
   for (const h of windows) {
+    // 子请求不够查完这个窗口的所有账号：这个窗口这次不查（不完整的数据会少算，干脆不判断），下次轮到它
+    if (quota.left < accounts.length) { skipped.push(h); continue; }
+    quota.left -= accounts.length;
     const since = now - h * 3600e3;
     const map = new Map();
     const res = await Promise.all(accounts.map((a) => aeQuery(fetchFn, a, cfAccountIdOf(a, usage), sqlOf(since / 1000)).catch((e) => ({ ok: false, error: String(e?.message || e) }))));
@@ -461,6 +492,8 @@ async function collectAgg({ windows, accounts, usage, users, fetchFn, now, sqlOf
     const recent = users.filter((u) => cutoffOf(u, since) > since);
     for (const u of recent) map.delete(u.id);
     for (const u of recent.slice(0, AUTOBAN_RECENT_MAX)) {
+      if (quota.left < accounts.length) break; // 剩下的这次不判断
+      quota.left -= accounts.length;
       const rs = await Promise.all(accounts.map((a) => aeQuery(fetchFn, a, cfAccountIdOf(a, usage), sqlOf(cutoffOf(u, since) / 1000, u.id)).catch(() => ({ ok: false }))));
       for (const r of rs) if (r.ok) aggregateRows(map, r.rows);
     }
@@ -474,33 +507,43 @@ async function collectAgg({ windows, accounts, usage, users, fetchFn, now, sqlOf
  * 调用方随后应 syncUsers({query:false}) 把新名单下发（封禁要马上生效）。
  * @returns {Promise<{ran:boolean, banned:{id:string, reason:string, until:number}[], errors:Record<string,string>, notes:string[]}>}
  */
-export async function runAutoBan({ store, settings, accounts, usage, fetchFn = globalThis.fetch, now = Date.now(), force = false, mainAe = false }) {
+export async function runAutoBan({ store, settings, accounts, usage, fetchFn = globalThis.fetch, now = Date.now(), force = false, mainAe = false, budget = Infinity }) {
   const cfg = settings?.users?.autoBan;
   const result = { ran: false, banned: [], errors: {}, notes: [] };
   if (!settings?.users?.enabled || (!cfg?.enabled && !force)) return result;
   const [users, metas, rec] = await Promise.all([getUsers(store), store.getJson(MU_KEYS.accounts, 30e3), store.getJson(MU_KEYS.sync, 10e3)]);
   const meta = metas || {};
   const targets = (accounts || []).filter((a) => meta[a.id]?.nsId && !meta[a.id]?.aeMissing && cfAccountIdOf(a, usage) && a.enabled !== false).slice(0, MAX_SYNC_ACCOUNTS);
-  const nodeWindows = ruleWindows(cfg, 'node');
-  const mainWindows = ruleWindows(cfg, 'main');
+  // 子请求预算（Cron 免费版每次最多 50 个，还要和同步、下发共用）：每个窗口要查全部账号；放不下时轮流查，
+  // 这次从第几个窗口开始按检查次数轮换，保证每个窗口都会轮到
+  const quota = { left: Math.max(0, Number(budget)) };
+  const skipped = [];
+  const rotate = (ws) => { if (ws.length < 2) return ws; const k = Math.floor(now / 60e3 / (cfg?.checkMinutes || 10)) % ws.length; return ws.slice(k).concat(ws.slice(0, k)); };
+  const nodeWindows = rotate(ruleWindows(cfg, 'node').sort((a, b) => a - b));
+  const mainWindows = rotate(ruleWindows(cfg, 'main').sort((a, b) => a - b));
   const node = nodeWindows.length && targets.length
-    ? await collectAgg({ windows: nodeWindows, accounts: targets, usage, users, fetchFn, now, sqlOf: (s, only) => nodeAggSql(MU_DATASET, s, only), errors: result.errors })
+    ? await collectAgg({ windows: nodeWindows, accounts: targets, usage, users, fetchFn, now, sqlOf: (s, only) => nodeAggSql(MU_DATASET, s, only), errors: result.errors, quota, skipped })
     : new Map();
   let main = new Map();
   if (mainWindows.length) {
     const ma = mainAccountOf(accounts, usage);
     if (!mainAe) result.notes.push('订阅相关规则没有数据：主站没有绑定 Analytics Engine（NT_AE）');
     else if (!ma) result.notes.push('订阅相关规则没有数据：没有可用的主号凭据（「额度」页填主号 Token）');
-    else main = await collectAgg({ windows: mainWindows, accounts: [ma], usage, users, fetchFn, now, sqlOf: (s, only) => subAggSql(MU_DATASET, s, only), errors: result.errors });
+    else main = await collectAgg({ windows: mainWindows, accounts: [ma], usage, users, fetchFn, now, sqlOf: (s, only) => subAggSql(MU_DATASET, s, only), errors: result.errors, quota, skipped });
   }
+  if (skipped.length) result.notes.push(`子请求不够，这次没查 ${[...new Set(skipped)].join(' / ')} 小时窗口的规则（下次轮流补上；节点账号多时建议加每分钟的 Cron 触发器）`);
   result.ran = true;
   const hits = evaluateRules({ users, cfg, node, main, overHits: rec?.overHits || {}, now });
   if (!hits.length) return result;
   const byId = new Map(hits.map((h) => [h.id, h]));
-  const next = users.map((u) => {
+  // 写回前重新读最新的名单，只改这次被封的人：查询要好几秒，期间后台可能刚解封 / 删除 / 新建过用户
+  const fresh = await getUsers(store, 0);
+  const next = fresh.map((u) => {
     const h = byId.get(u.id);
     // 两分钟内刚封过的跳过（两个实例同时检查时不重复累计违规次数）
     if (!h || now - (u.banAt || 0) < 120e3) return u;
+    // 检查开始之后被后台解封过、或已经在封禁中：这次的结果基于旧数据，不动
+    if ((u.unbanAt || 0) >= now || banActive(u, now)) return u;
     const v = banUser(u, { now, auto: true, reason: hitReason(h), cfg });
     result.banned.push({ id: u.id, reason: v.banReason, until: v.bannedUntil });
     return v;
