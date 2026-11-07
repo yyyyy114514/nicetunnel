@@ -366,6 +366,8 @@ function clientMain() {
       { t: "基本设置", f: [
         ['users.defaultLimit', '默认并行客户端数（同时在线的不同 IP；0 = 不限）', 'num'],
         ['users.banMessage', '封禁提示', 'text', null, 0, '被封用户的客户端里会出现一个以此为名的节点（后面自动加上解封时间或"永久"），浏览器打开显示这句话；规则全部直连，不会断网。最多 60 字'],
+        ['users.requireLabel', '填写标识才开订阅', 'bool', null, 0, '只对开启期间生成的用户生效：用户先在浏览器打开订阅链接、填写标识并确认后，才显示导入方式、订阅才可用。开启之前生成的、关闭之后生成的用户不受影响；后台「重置标识」会让这类用户重新填写才能用'],
+        ['users.needLabelMessage', '未填标识提示', 'text', null, 0, '没填标识时，客户端里出现一个以此为名的节点（规则全部直连），浏览器打开时显示在填写框上方。最多 60 字'],
       ] },
       { t: "自动封禁", act: [['abRun', '立即检查一次']], out: 'outAb', d: '任一条开启的规则（见下一张卡片）达到阈值就自动封禁，时长按阶梯处罚：统计周期内第 1 次违规封第 1 档，第 2 次封第 2 档……次数超过档数时一直用最后一档。封禁或解封之后，规则只算之后的数据，旧数据不会让人一解封就再被封。检查跟着 Cron 跑，不增加 Worker 请求。', f: [
         ['users.autoBan.enabled', '开启自动封禁', 'bool'],
@@ -659,6 +661,7 @@ function clientMain() {
       return '<span class="pill p-exhausted" title="' + h(u.banReason || '') + '">已封禁</span><div class="mut" style="font-size:12px;white-space:nowrap;margin-top:2px">' + h(until) + (u.banAuto ? ' · 自动' : '') + '</div>';
     }
     if (u.banned) return '<span class="pill p-stale" title="' + h(u.banReason || '') + '">封禁已到期</span>';
+    if (u.needLabel && !u.labelAt) return '<span class="pill p-low" title="「填写标识才开订阅」开启期间生成：用户在浏览器打开订阅链接填写标识后，订阅才可用">待填标识</span>';
     return '<span class="pill p-ok">正常</span>';
   };
   function usersListHtml() {

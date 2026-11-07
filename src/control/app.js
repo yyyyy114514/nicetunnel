@@ -13,7 +13,7 @@ import { detectIsp } from '../lib/isp.js';
 import { UUID_RE } from './identity.js';
 import { handleLogin, handleLogout, requireAuth, isAuthed, bearerToken, safeEqual } from './auth.js';
 import { trackRequest } from './logs.js';
-import { verifySubToken, readyAccountSet, setUserLabel } from './users.js';
+import { verifySubToken, readyAccountSet, setUserLabel, labelPending } from './users.js';
 import { landingHtml } from './sub/landing.js';
 import { noticeConfig, noticeHtml } from './sub/notice.js';
 import { banNotice } from './autoban.js';
@@ -199,6 +199,22 @@ export async function handleMain({ request, env, ctx, url, identity }) {
         return new Response(nc.body, { status: 200, headers: { 'Content-Type': nc.contentType, 'Subscription-Userinfo': `upload=0; download=0; total=0; expire=${Math.floor(now / 1000)}`, ...noStore } });
       }
       if (!v.ok) return camouflage(request, url, env.URL || 'nginx');
+      // 填写标识才开订阅：还没填时，浏览器只给填写标识的页面；客户端拿到一份只有"提示语占位节点"的配置（规则全直连），
+      // 和被封禁时一样，用户在节点列表里就能看到要做什么。填好后客户端下次更新就是正常订阅
+      if (labelPending(v.user)) {
+        if (rateLimited(ip, stored.sub.rateLimitPerMinute, now)) return new Response('请求过于频繁，请稍后再试', { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain; charset=utf-8' } });
+        const msg = stored.users?.needLabelMessage || '未添加标识信息，浏览器打开订阅链接填写信息后即可使用订阅';
+        const noStore = { 'Cache-Control': 'no-store', 'X-NT-Status': 'need-label', 'Profile-Update-Interval': '1' };
+        if (browserUa && [...url.searchParams.keys()].every((k) => k === 'u')) {
+          return new Response(landingHtml({ siteName: stored.site?.name || 'nicetunnel', subUrl: `${url.protocol}//${url.host}/sub?u=${encodeURIComponent(v.token)}`, name: v.user.name, gate: msg }), {
+            status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Robots-Tag': 'noindex', ...noStore },
+          });
+        }
+        const fmtUrl = new URL(url.href);
+        if (fmtUrl.searchParams.get('target') === 'home') fmtUrl.searchParams.delete('target');
+        const nc = noticeConfig(detectFormatInfo(fmtUrl, ua).format, msg);
+        return new Response(nc.body, { status: 200, headers: { 'Content-Type': nc.contentType, ...noStore } });
+      }
       user = { id: v.user.id, uuid: v.uuid, token: v.token };
       // 主站绑定了 Analytics Engine（NT_AE）时记一条订阅更新（自动封禁的订阅类规则用；不算 Worker 请求、不占 KV）
       if (env.NT_AE && typeof env.NT_AE.writeDataPoint === 'function') {

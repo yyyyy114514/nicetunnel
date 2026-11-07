@@ -77,7 +77,7 @@ export function createUsersRoutes(readJson) {
       if (!Number.isFinite(count) || count < 1 || count > MAX_BATCH) return errorResponse(400, 'invalid', `数量必须是 1~${MAX_BATCH}`);
       const all = await getUsers(c.store);
       let made;
-      try { made = makeUsers(all, { count, prefix: body.prefix, limit: body.limit, now: c.now }); } catch (e) { return errorResponse(400, e.code || 'invalid', e.message); }
+      try { made = makeUsers(all, { count, prefix: body.prefix, limit: body.limit, now: c.now, needLabel: !!c.settings.users?.requireLabel }); } catch (e) { return errorResponse(400, e.code || 'invalid', e.message); }
       await saveUsers(c.store, all.concat(made));
       const push = await pushNow(c);
       return jsonResponse({ ok: true, created: await withLinks(c, ctx, made), push });

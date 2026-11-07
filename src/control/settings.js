@@ -157,6 +157,8 @@ export function defaultSettings() {
     // 多用户专属链接（见 control/users.js）：开启后后台多一个「用户」页
     users: {
       enabled: false, defaultLimit: 2, banMessage: '此链接已停用，请联系管理员',
+      // 填写标识才开订阅：开启期间生成的用户，要先在浏览器打开链接填写标识，订阅才可用（之前 / 关闭后生成的不受影响）
+      requireLabel: false, needLabelMessage: '未添加标识信息，浏览器打开订阅链接填写信息后即可使用订阅',
       // 自动封禁（可选）：任一条开启的规则触发就按阶梯封禁；统计周期过了违规次数清零（见 control/autoban.js）
       autoBan: { enabled: false, checkMinutes: 10, resetHours: 168, ladder: DEFAULT_LADDER.slice(), ...JSON.parse(JSON.stringify(AUTOBAN_DEFAULTS)) },
     },
@@ -366,6 +368,9 @@ export function normalizeSettings(raw) {
   us.defaultLimit = int(us.defaultLimit, 2, 0, 50); // 0 = 不限
   // 被封禁用户拉订阅时看到的提示（占位节点的名字 / 浏览器提示页的标题）
   us.banMessage = String(us.banMessage ?? '').replace(/[\x00-\x1f\x7f<>]/g, '').trim().slice(0, 60) || '此链接已停用，请联系管理员';
+  us.requireLabel = bool(us.requireLabel, false);
+  // 没填标识的用户拉订阅时看到的提示（占位节点的名字 / 浏览器页面的说明）
+  us.needLabelMessage = String(us.needLabelMessage ?? '').replace(/[\x00-\x1f\x7f<>]/g, '').trim().slice(0, 60) || '未添加标识信息，浏览器打开订阅链接填写信息后即可使用订阅';
   const ab = us.autoBan;
   ab.enabled = bool(ab.enabled, false);
   // 检查间隔取 5 的倍数（Cron 每 1 或 5 分钟触发一次，按"分钟数能整除"判断该不该检查）

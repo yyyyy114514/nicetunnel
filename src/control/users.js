@@ -51,6 +51,9 @@ export async function setUserLabel({ store, settings, token, label, now = Date.n
   return { ok: true, label: text };
 }
 
+/** 还没填标识、订阅被挡着（只有「填写标识才开订阅」开启期间生成的用户才会这样） */
+export const labelPending = (u) => !!(u && u.needLabel && !u.labelAt);
+
 export function normalizeUser(u) {
   if (!u || typeof u !== 'object' || !/^[a-z0-9]{8}$/.test(String(u.id || ''))) return null;
   const n = (x) => Math.max(0, Math.round(Number(x) || 0));
@@ -61,6 +64,8 @@ export function normalizeUser(u) {
     vio: n(u.vio), vioSince: n(u.vioSince), banAt: n(u.banAt), unbanAt: n(u.unbanAt),
     // 用户自己在订阅页填写的标识（只能设置一次；labelAt > 0 表示已锁定，后台可重置）
     label: cleanLabel(u.label), labelAt: n(u.labelAt),
+    // 生成时开着「填写标识才开订阅」：填写标识之前订阅不可用
+    needLabel: !!u.needLabel,
   };
 }
 export const normalizeUsers = (list) => {
@@ -72,7 +77,7 @@ export async function getUsers(store) { return normalizeUsers(await store.getJso
 export async function saveUsers(store, list) { const n = normalizeUsers(list); await store.putJson(MU_KEYS.users, n, 30e3); return n; }
 
 /** 生成一批用户（名字：前缀 + 序号） */
-export function makeUsers(existing, { count, prefix = '', limit = null, now }) {
+export function makeUsers(existing, { count, prefix = '', limit = null, now, needLabel = false }) {
   const n = Math.max(1, Math.min(MAX_BATCH, Math.round(Number(count)) || 1));
   if (existing.length + n > MAX_USERS) throw Object.assign(new Error(`用户总数上限 ${MAX_USERS}`), { code: 'too_many' });
   const ids = new Set(existing.map((u) => u.id));
@@ -83,7 +88,7 @@ export function makeUsers(existing, { count, prefix = '', limit = null, now }) {
     const id = newUserId();
     if (ids.has(id)) continue;
     ids.add(id);
-    out.push({ id, name: base ? `${base}${String(start + out.length + 1).padStart(String(start + n).length, '0')}` : '', limit: cleanLimit(limit), banned: false, createdAt: now });
+    out.push({ id, name: base ? `${base}${String(start + out.length + 1).padStart(String(start + n).length, '0')}` : '', limit: cleanLimit(limit), banned: false, createdAt: now, ...(needLabel ? { needLabel: true } : {}) });
   }
   return out;
 }

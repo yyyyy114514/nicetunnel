@@ -66,6 +66,56 @@ test('标识：提交也受限速', async () => {
   assert.deepEqual(codes, [200, 409, 429]);
 });
 
+test('填写标识才开订阅：只对开启期间生成的用户生效；填之前订阅只给提示、页面只给填写框；填完恢复正常；重置标识后又要填', async () => {
+  const { kv, admin, put, page, env } = setup();
+  const setUsers = (users) => { kv.m.set('nt.settings', JSON.stringify(settingsWith({ users: { enabled: true, ...users } }))); resetStoreState(); };
+  const clash = (sub) => worker.fetch(new Request(sub, { headers: { 'User-Agent': 'clash-verge/v2.0', 'CF-Connecting-IP': '7.7.7.' + Math.floor(Math.random() * 200) } }), env, { waitUntil() {} });
+  const mk = async () => (await (await admin('/admin/api/users/create', { count: 1 })).json()).created[0];
+
+  const before = await mk(); // 开启之前生成
+  setUsers({ requireLabel: true, needLabelMessage: '先去填标识' });
+  const gated = await mk();
+  setUsers({ requireLabel: false, needLabelMessage: '先去填标识' });
+  const after = await mk(); // 关闭之后生成（开关关了，已经生成的那个照样要填）
+
+  for (const u of [before, after]) {
+    const r = await clash(u.sub);
+    assert.equal(r.headers.get('X-NT-Status'), null, '不受影响');
+    assert.ok((await (await page(u.sub)).text()).includes('class="card a-imp"'), '直接显示导入方式');
+  }
+  // 还没填：客户端拿到提示配置，节点名就是提示语
+  let r = await clash(gated.sub);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('X-NT-Status'), 'need-label');
+  assert.ok((await r.text()).includes('先去填标识'));
+  // 浏览器：只有填写框和提示，没有导入按钮 / 二维码 / 链接；页面脚本能正常运行（没有复制按钮也不报错）
+  let html = await (await page(gated.sub)).text();
+  assert.ok(html.includes('data-gate="1"') && html.includes('先去填标识') && html.includes('id="lv"'));
+  assert.ok(!html.includes('class="card a-imp"') && !html.includes('id="u"') && !html.includes('<svg'), '不显示导入方式');
+  const js = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  assert.doesNotThrow(() => new Function(js));
+  assert.ok(js.includes('location.reload()'), '填完刷新出导入方式');
+  // 列表里能看出来
+  const list = await (await admin('/admin/api/users?q=' + gated.id, undefined, 'GET')).json();
+  assert.equal(list.users[0].needLabel, true);
+  // 填写后恢复正常
+  assert.equal((await put(gated.sub, '小王')).status, 200);
+  r = await clash(gated.sub);
+  assert.equal(r.headers.get('X-NT-Status'), null);
+  html = await (await page(gated.sub)).text();
+  assert.ok(html.includes('class="card a-imp"') && !html.includes('id="lb"'));
+  // 后台重置标识：又要填
+  await admin('/admin/api/users/update', { ids: [gated.id], resetLabel: true });
+  resetStoreState();
+  assert.equal((await clash(gated.sub)).headers.get('X-NT-Status'), 'need-label');
+});
+
+test('填写标识才开订阅：提示文案默认值与清洗', () => {
+  assert.equal(normalizeSettings(settingsWith({})).users.requireLabel, false);
+  assert.equal(normalizeSettings(settingsWith({})).users.needLabelMessage, '未添加标识信息，浏览器打开订阅链接填写信息后即可使用订阅');
+  assert.equal(normalizeSettings(settingsWith({ users: { needLabelMessage: '  <b>x\ny</b> ' } })).users.needLabelMessage, 'bxy/b');
+});
+
 const INI = (await import('../src/control/sub/ini.js')).parseIni((await import('../src/control/sub/ini.js')).DEFAULT_INI_TEXT);
 const ctxOf = (s) => ({ uuid: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d', settings: s, now: 0, requestUrl: 'https://x/sub', subName: 'x', userAgent: 'clash', generatorMode: false });
 
