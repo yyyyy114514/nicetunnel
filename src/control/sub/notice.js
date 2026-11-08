@@ -2,10 +2,10 @@
 // 而是返回一份合法的配置，里面只有一个名字就是提示语的占位节点——用户在节点列表里一眼就能看到。
 // 规则一律直连：不会因为这份配置把用户的网络整个搞断。浏览器打开则给一个提示页。
 
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+import { escHtml as esc } from '../../lib/html.js';
+import { base64Utf8 as b64 } from './links.js';
 /** 节点名里不能有换行、逗号、等号（Surge）、引号 */
 const nodeName = (s) => String(s || '').replace(/[\r\n,="']/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || '此链接已停用';
-const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 
 /**
  * @param {'mixed'|'base64'|'clash'|'singbox'|'surge'} format

@@ -23,7 +23,8 @@ const TTL = { settings: 30e3, accounts: 30e3, usage: 20e3, log: 10e3 };
 const memo = new Map(); // key -> {v, exp}
 // localUsage：本 isolate 轮询得到但尚未落盘的快照（不能被 KV 里的旧快照覆盖，否则下一轮又从同一批账号开始）
 // persistedUsage：最近一次从 KV 读到或写入 KV 的快照（判断"是否需要写"必须和它比，而不是和内存版比）
-const fresh = () => ({ day: '', writes: 0, lastUsageWrite: 0, lastLogFlush: 0, logBuf: [], localUsage: null, persistedUsage: null });
+// authRefreshAt：cookie 校验失败时重读密钥的节流（每个 isolate 30 秒一次）。必须放在这里：每个请求都会新建 store
+const fresh = () => ({ day: '', writes: 0, lastUsageWrite: 0, lastLogFlush: 0, logBuf: [], localUsage: null, persistedUsage: null, authRefreshAt: 0 });
 const state = fresh();
 
 /** 测试用：清空 isolate 级缓存 */
@@ -68,8 +69,9 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
     if (hit && hit.exp > t && ttlMs > 0 && t - (hit.at ?? -Infinity) < ttlMs) return hit.v;
     let v;
     try { v = await loader(); } catch (e) {
-      // KV 暂时读不到：有旧缓存就先用旧的（10 秒后再试），没有才报错
-      if (hit) { memo.set(key, { v: hit.v, at: t, exp: t + 10e3 }); return hit.v; }
+      // KV 暂时读不到：有旧缓存就先用旧的（10 秒后再试），没有才报错。
+      // 但调用方要求读最新的（ttlMs=0，读出来改完要整表写回）时不能拿旧的顶替，否则会把过期数据写回去
+      if (hit && ttlMs > 0) { memo.set(key, { v: hit.v, at: t, exp: t + 10e3 }); return hit.v; }
       throw e;
     }
     memo.set(key, { v, at: t, exp: t + ttlMs });
@@ -226,7 +228,6 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
     const back = await kv.get(KEYS.authKey).catch(() => null);
     return typeof back === 'string' && /^[0-9a-f]{32,}$/.test(back) ? back : s;
   }
-  let authRefreshAt = 0;
   /**
    * 没绑定 KV 或读写失败时返回 ''（调用方退回推导的密钥）。
    * refresh=true：cookie 校验失败时重新读一次 KV（每个实例 30 秒最多一次）——首次部署的竞态下，
@@ -235,8 +236,8 @@ export function createStore({ kv, now = Date.now, normalizeAccounts = (a) => (Ar
   async function getAuthSecret({ refresh = false } = {}) {
     if (!kvBound) return '';
     if (refresh) {
-      if (now() - authRefreshAt < 30e3) return '';
-      authRefreshAt = now();
+      if (now() - state.authRefreshAt < 30e3) return '';
+      state.authRefreshAt = now();
       memo.delete(KEYS.authKey);
     }
     try { return await cached(KEYS.authKey, 3600e3, loadAuthSecret); } catch { return ''; }

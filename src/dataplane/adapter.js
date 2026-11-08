@@ -26,10 +26,8 @@ export function normalizeRequestUrl(raw) {
   return new URL(text);
 }
 
-export function clientIp(request) {
-  const h = request.headers;
-  return h.get('CF-Connecting-IP') || h.get('True-Client-IP') || h.get('X-Real-IP') || h.get('X-Forwarded-For') || h.get('Fly-Client-IP') || h.get('X-Appengine-Remote-Addr') || h.get('X-Cluster-Client-IP') || '未知IP';
-}
+import { clientIp } from '../lib/client-ip.js';
+export { clientIp };
 
 let whitelistCache = null;
 
@@ -222,6 +220,8 @@ export async function camouflage(request, url, setting, fetchFn = fetch) {
     try {
       const proxyUrl = new URL(target);
       const headers = new Headers(request.headers);
+      // 不把凭据转给第三方站点：登录过的管理员访问到伪装页路径时，后台 cookie 会被对方拿去（同 UA 可重放）
+      for (const k of ['cookie', 'authorization', 'proxy-authorization']) headers.delete(k);
       headers.set('Host', proxyUrl.host);
       headers.set('Referer', proxyUrl.origin);
       headers.set('Origin', proxyUrl.origin);

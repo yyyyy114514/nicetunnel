@@ -1,9 +1,9 @@
 // 专属订阅的"落地页"：用户在浏览器里打开自己的订阅链接时看到的页面——各客户端一键导入、二维码、复制链接。
 // 代理客户端拉同一个链接照常拿订阅（按 UA 区分，见 app.js）。页面自包含，不加载任何外部资源。
 import { qrSvg } from '../../lib/qr.js';
-
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+import { escHtml as esc } from '../../lib/html.js';
+// base64：用公共的分块写法（展开参数的写法遇到很长的输入会抛 RangeError）
+import { base64Utf8 as b64 } from './links.js';
 
 /** 各客户端的一键导入链接（只放格式确定的客户端） */
 export function importLinks(subUrl, name = '', { home = false } = {}) {

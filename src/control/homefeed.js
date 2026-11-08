@@ -91,7 +91,7 @@ export function parseVpnGate(text, { max = 40, excludeOfficial = true } = {}) {
     const host = p[0], score = p[2], cc = p[6];
     const lastComma = s.lastIndexOf(',', end);
     if (lastComma <= cut) continue;
-    if (excludeOfficial && isOfficial(host, s.slice(cut + 1, Math.min(cut + 120, end)))) continue;
+    if (excludeOfficial && isOfficial(host, p[12])) continue; // p[12] = Operator（第 13 列）
     const b64 = s.slice(lastComma + 1, end).trim();
     const head = asciiB64(b64.slice(0, HEAD_B64));
     if (!/^proto\s+tcp/m.test(head)) continue; // CF 节点只能转发 TCP

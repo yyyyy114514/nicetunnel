@@ -1,7 +1,7 @@
 // 后台页面：完整自包含 HTML（内联 CSS/JS，无任何外部资源——国内网络访问不了 CDN）。
 // 客户端脚本写成普通函数，通过 Function.prototype.toString 内联进页面，免去手工转义。
 
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+import { escHtml as esc } from '../lib/html.js';
 
 const CSS = `
 :root{color-scheme:light dark;--bg:#f4f5f9;--bg2:#eceef5;--card:#ffffffcc;--card-s:#fff;--fg:#14161f;--mut:#5c6378;--line:#e2e5ee;--pri:#5b5bf0;--pri2:#8b5cf6;--pri-fg:#fff;--ok:#0a7a50;--warn:#9a5700;--bad:#c9302c;--soft:#eeeefe;--grad:linear-gradient(135deg,#5b5bf0,#8b5cf6);--pri-sh:var(--pri-sh);--ring:#5b5bf02e;--r:16px;--sh:0 1px 2px #1b1f3a0a,0 8px 28px #1b1f3a10;--glow:radial-gradient(900px 420px at 85% -10%,#8b5cf622,transparent 60%),radial-gradient(700px 380px at -5% 0%,#5b5bf01c,transparent 55%)}

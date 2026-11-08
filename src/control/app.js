@@ -99,7 +99,7 @@ export async function handleMain({ request, env, ctx, url, identity }) {
   // 这里省掉跳转那一次（主站订阅请求数减半）；客户端看到的内容完全一样。
   // LOGIN_PATH 与 KEY 设成同一个值时：浏览器打开是登录页，代理客户端拿订阅（否则客户端会拿到登录页 HTML，
   // 报 "Unexpected scalar at node end" 之类的 YAML 解析错误）。自检会提示把两者设成不同的值。
-  const isKeyPath = path === identity.secretKey && identity.hasCustomKey;
+  const isKeyPath = identity.hasCustomKey && safeEqual(path, identity.secretKey); // 常量时间比较
   const browserUa = /mozilla/i.test(ua) && !/clash|mihomo|stash|verge|sing-?box|surge|shadowrocket|quantumult|loon|v2ray|nekobox|hiddify|karing|flclash/i.test(ua);
   const keyToLogin = isKeyPath && hidden && path === hidden && browserUa;
   if (isKeyPath && !keyToLogin) {
@@ -176,7 +176,7 @@ export async function handleMain({ request, env, ctx, url, identity }) {
     const generatorMode = isGeneratorRequest(env, url, ua);
     // 多用户专属订阅：/sub?u=<用户ID>.<签名>
     const userTok = generatorMode ? '' : (url.searchParams.get('u') || '');
-    if (!userTok && token !== identity.subToken && !generatorMode) return camouflage(request, url, env.URL || 'nginx');
+    if (!userTok && !(token && safeEqual(token, identity.subToken)) && !generatorMode) return camouflage(request, url, env.URL || 'nginx');
     const stored = await store.getSettings();
     let user = null, muReady = null;
     if (userTok) {

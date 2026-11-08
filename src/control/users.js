@@ -101,7 +101,16 @@ export const normalizeUsers = (list) => {
 };
 
 /** ttlMs：读缓存时长。要改了再整表写回的地方传 0（读最新的），否则会用旧缓存覆盖别处刚做的改动 */
-export async function getUsers(store, ttlMs = 30e3) { return normalizeUsers(await store.getJson(MU_KEYS.users, ttlMs)); }
+export async function getUsers(store, ttlMs = 30e3) {
+  const raw = await store.getJson(MU_KEYS.users, ttlMs);
+  if (!raw || typeof raw !== 'object') return normalizeUsers(raw);
+  // 5000 个用户规整一遍要 4~5ms（免费版每请求才 10ms CPU），每个 /sub?u= 都会走到这里：
+  // 同一份缓存对象只规整一次。结果冻结，调用方只能 map / filter 出新数组，不能原地改
+  let n = normalizedOf.get(raw);
+  if (!n) { n = Object.freeze(normalizeUsers(raw).map((u) => Object.freeze(u))); normalizedOf.set(raw, n); }
+  return n;
+}
+const normalizedOf = new WeakMap();
 export async function saveUsers(store, list) { const n = normalizeUsers(list); await store.putJson(MU_KEYS.users, n, 30e3); return n; }
 
 /** 生成一批用户（名字：前缀 + 序号） */

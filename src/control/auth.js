@@ -33,11 +33,8 @@ const redirect = (location, headers = {}) => new Response('重定向中...', { s
 export const requestUa = (request) => request.headers.get('User-Agent') || 'null';
 
 /** 客户端 IP，请求头优先级与上游 访问IP（_worker.js 50 行）一致 */
-export function clientIp(request) {
-  const h = request.headers;
-  return h.get('CF-Connecting-IP') || h.get('True-Client-IP') || h.get('X-Real-IP') || h.get('X-Forwarded-For')
-    || h.get('Fly-Client-IP') || h.get('X-Appengine-Remote-Addr') || h.get('X-Cluster-Client-IP') || '未知IP';
-}
+import { clientIp } from '../lib/client-ip.js';
+export { clientIp };
 
 /** 读取 cookie 值；解析方式与上游相同（split(';') 后找 `name=` 前缀，取第一个 '=' 后到下一个 '=' 前） */
 export function readCookie(request, name = AUTH_COOKIE) {
@@ -216,12 +213,38 @@ function wantsJson(request) {
 }
 
 /** 从 JSON / urlencoded / multipart 表单中取 password（体积上限 8KB） */
+const LOGIN_BODY_MAX = 8192;
+/** 最多读 max 字节（流式读，超过就停）。formData() / text() 会先把整个请求体读完，匿名用户可以塞很大的请求体 */
+export async function readBodyLimited(request, max = LOGIN_BODY_MAX) {
+  const declared = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declared) && declared > max) return null;
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks = [];
+  let n = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.byteLength;
+      if (n > max) { await reader.cancel().catch(() => {}); return null; }
+      chunks.push(value);
+    }
+  } catch { return null; }
+  const out = new Uint8Array(n);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.byteLength; }
+  return out;
+}
+
 async function readPassword(request) {
   const ct = (request.headers.get('Content-Type') || '').toLowerCase();
+  const bytes = await readBodyLimited(request);
+  if (!bytes) return ''; // 超过 8KB：当作密码错误
   if (ct.includes('multipart/form-data')) {
-    try { const fd = await request.formData(); return String(fd.get('password') ?? ''); } catch { return ''; }
+    try { const fd = await new Response(bytes, { headers: { 'Content-Type': request.headers.get('Content-Type') || '' } }).formData(); return String(fd.get('password') ?? ''); } catch { return ''; }
   }
-  const text = (await request.text()).slice(0, 8192);
+  const text = new TextDecoder().decode(bytes);
   if (ct.includes('application/json') || /^\s*\{/.test(text)) {
     try { const j = JSON.parse(text); return typeof j?.password === 'string' ? j.password : ''; } catch { return ''; }
   }
