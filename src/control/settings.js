@@ -163,6 +163,8 @@ export function defaultSettings() {
       autoBan: { enabled: false, checkMinutes: 10, resetHours: 168, ladder: DEFAULT_LADDER.slice(), ...JSON.parse(JSON.stringify(AUTOBAN_DEFAULTS)) },
     },
     ui: { simpleMode: false },
+    // 节点防护（gate / 仅多用户 / 紧急锁定）：推送到各节点账号 KV 的 nt.mu.state 扩展字段
+    security: { gate: '', rejectSharedUuid: false, lockdown: false },
   };
 }
 
@@ -387,6 +389,13 @@ export function normalizeSettings(raw) {
   }
 
   s.ui.simpleMode = bool(s.ui.simpleMode, false);
+
+  // 防护设置：gate（仅含字母数字，限 32 字符）、rejectSharedUuid、lockdown
+  const sec = s.security;
+  sec.gate = String(sec.gate ?? '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
+  sec.rejectSharedUuid = bool(sec.rejectSharedUuid, false);
+  sec.lockdown = bool(sec.lockdown, false);
+
   return s;
 }
 

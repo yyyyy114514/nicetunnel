@@ -55,6 +55,44 @@ function report(env, id, tag, colo, allowed, now) {
 }
 
 /**
+ * 紧急锁定检查：state.lock === true 时封锁所有代理连接（包括共享 UUID）。
+ * 返回 true = 已锁定，调用方应返回伪装页。
+ */
+export async function lockCheck(env, now = Date.now()) {
+  const st = await loadState(env, now);
+  return !!(st?.lock);
+}
+
+/**
+ * 仅多用户检查：state.muOnly === true 时拒绝不带 /_u<ID> 前缀的共享 UUID 连接。
+ * 应在 gate 剥离之后、muCheck 之前调用；pathname 是剥离 gate 后的路径。
+ * 返回 true = 应拒绝（给伪装页），false = 放行。
+ */
+export async function muOnlyCheck(env, now = Date.now()) {
+  const st = await loadState(env, now);
+  return !!(st?.muOnly);
+}
+
+/**
+ * Gate 前缀剥离：若 state.gate 非空，且路径以 /<gate>/ 开头（或正好是 /<gate>），则返回去掉前缀的新 URL；
+ * 否则 state.gate 非空但路径不匹配时返回 null（表示请求不合法，应拒绝）；state.gate 为空返回 url 原值。
+ * @returns {URL|null} null = gate 不匹配，拒绝；URL = 已剥离（或无需剥离）
+ */
+export async function gateStrip(url, env, now = Date.now()) {
+  const st = await loadState(env, now);
+  const gate = typeof st?.gate === 'string' ? st.gate.trim() : '';
+  if (!gate) return url; // 未设置 gate，直接放行
+  const prefix = '/' + gate;
+  const p = url.pathname;
+  if (p === prefix || p.startsWith(prefix + '/')) {
+    const next = new URL(url.href);
+    next.pathname = p.slice(prefix.length) || '/';
+    return next;
+  }
+  return null; // gate 已设置但路径不带正确前缀：拒绝
+}
+
+/**
  * 处理带用户前缀的连接。
  * @returns {Promise<null | {ok:false, reason:string} | {ok:true, id:string, uuid:string, url:URL}>}
  *   null = 不是用户链接（照常用共享 UUID）
@@ -84,7 +122,7 @@ export async function muCheck(request, env, url, ip, now = Date.now()) {
 export function muInfo(env) {
   return {
     kv: !!env?.[MU_KV_BINDING], ae: !!env?.[MU_AE_BINDING],
-    state: iso.state ? { on: iso.state.on !== false, v: iso.state.v || 0, ageSec: iso.at ? Math.round((Date.now() - iso.at) / 1000) : null } : null,
+    state: iso.state ? { on: iso.state.on !== false, v: iso.state.v || 0, ageSec: iso.at ? Math.round((Date.now() - iso.at) / 1000) : null, gate: !!(iso.state.gate), lock: !!(iso.state.lock), muOnly: !!(iso.state.muOnly) } : null,
     err: iso.lastErr || '',
   };
 }

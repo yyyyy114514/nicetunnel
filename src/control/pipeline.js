@@ -204,6 +204,7 @@ export async function buildSubscription(o) {
     uuid, settings: renderSettings, now, requestUrl: url.href, subName: settings.site.name,
     userAgent: o.ua || '', generatorMode: !!o.generatorMode, randomPath,
     muPrefix: user ? muPathPrefix(user.id) : '',
+    gatePrefix: (!o.generatorMode && settings.security?.gate) ? '/' + settings.security.gate : '',
     home,
   };
   const out = renderSubscription({ format: o.format, nodes, ctx, ini: rules.ini, rules });

@@ -17,6 +17,7 @@ import { KEYS } from '../control/store.js';
 import { HOST_CHECK_TTL_MS } from '../control/allocator.js';
 import { sendTelegram, notifyUsageEvents, telegramConfigured, formatTime, escapeHtml, defaultNotifyState, redactSecrets } from '../control/notify.js';
 import { createUsersRoutes } from './users-api.js';
+import { syncUsers } from '../control/users.js';
 import { qrSvg } from '../lib/qr.js';
 import { refreshHome, loadHome } from '../control/homefeed.js';
 
@@ -713,6 +714,13 @@ export function createAdminApi(deps = {}) {
   }
 
   // ---------------- 路由表 ----------------
+  /** 防护状态变更后推送到各节点（沿用多用户同步通道；失败不中断响应） */
+  async function _securitySync(c, settings) {
+    try {
+      const [accounts, usage] = await Promise.all([c.store.getAccounts(), c.store.getUsage()]);
+      return await syncUsers({ store: c.store, settings, accounts, usage, fetchFn: c.fetchFn, now: c.now, query: false });
+    } catch (e) { return { error: redactSecrets(String(e?.message || e)).slice(0, 200) }; }
+  }
   /** @type {Record<string, (ctx:object, c:object)=>Promise<Response>>} key = `METHOD path`（path 不含 /admin/api/ 前缀） */
   const API_ROUTES = {
     'GET state': getState,
@@ -749,6 +757,44 @@ export function createAdminApi(deps = {}) {
     },
     // 多用户专属链接（「用户」页）
     ...createUsersRoutes(readJson),
+    /** POST /admin/api/security/lockdown —— 立即开启紧急锁定并推送到节点 */
+    'POST security/lockdown': async (ctx, c) => {
+      const next = applyPatch(c.settings, { security: { lockdown: true } });
+      await c.store.saveSettings(next);
+      track(ctx, { ...c, settings: next }, 'Save_Config', '紧急锁定已开启');
+      const push = await _securitySync(c, next);
+      return jsonResponse({ ok: true, lockdown: true, push });
+    },
+    /** POST /admin/api/security/unlock —— 解除紧急锁定并推送到节点 */
+    'POST security/unlock': async (ctx, c) => {
+      const next = applyPatch(c.settings, { security: { lockdown: false } });
+      await c.store.saveSettings(next);
+      track(ctx, { ...c, settings: next }, 'Save_Config', '紧急锁定已解除');
+      const push = await _securitySync(c, next);
+      return jsonResponse({ ok: true, lockdown: false, push });
+    },
+    /** POST /admin/api/security/rotate-gate —— 生成新 gate 随机字符串并推送到节点 */
+    'POST security/rotate-gate': async (ctx, c) => {
+      const { body } = await readJson(ctx.request);
+      let gate = typeof body?.gate === 'string' && body.gate.trim() ? body.gate.trim().replace(/[^a-zA-Z0-9]/g, '').slice(0, 32) : '';
+      if (!gate) {
+        // 生成 16 位随机字母数字字符串
+        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        gate = Array.from(bytes, (b) => chars[b % chars.length]).join('');
+      }
+      const next = applyPatch(c.settings, { security: { gate } });
+      await c.store.saveSettings(next);
+      track(ctx, { ...c, settings: next }, 'Save_Config', `Gate 已更新`);
+      const push = await _securitySync(c, next);
+      return jsonResponse({ ok: true, gate, push });
+    },
+    /** POST /admin/api/security/sync —— 强制推送当前防护状态到各节点 */
+    'POST security/sync': async (ctx, c) => {
+      const push = await _securitySync(c, c.settings);
+      return jsonResponse({ ok: true, push });
+    },
   };
   /** 旧版路径（大小写与上游一致：getADDAPI 区分大小写，其余小写匹配） */
   const LEGACY_ROUTES = {

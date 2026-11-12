@@ -178,6 +178,8 @@ export async function handleMain({ request, env, ctx, url, identity }) {
     const userTok = generatorMode ? '' : (url.searchParams.get('u') || '');
     if (!userTok && !(token && safeEqual(token, identity.subToken)) && !generatorMode) return camouflage(request, url, env.URL || 'nginx');
     const stored = await store.getSettings();
+    // 拒绝共享 UUID 订阅：rejectSharedUuid 开启时，只允许多用户专属订阅（?u=）
+    if (!userTok && !generatorMode && stored.security?.rejectSharedUuid) return camouflage(request, url, env.URL || 'nginx');
     let user = null, muReady = null;
     if (userTok) {
       const v = await verifySubToken({ store, settings: stored, token: userTok });

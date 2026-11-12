@@ -404,8 +404,14 @@ export function computeOver(users, settings, byUser, prevOver = {}, now = Date.n
  */
 export function buildState({ nodeKey, users, settings, over, now = Date.now() }) {
   const on = !!settings?.users?.enabled;
+  const sec = settings?.security || {};
   // 封禁到期的用户自动回到名单里（名单变化会立即下发）
-  return { v: 2, on, key: nodeKey, ids: on ? users.filter((u) => !banActive(u, now)).map((u) => u.id).sort() : [], over: on ? over || {} : {} };
+  const state = { v: 2, on, key: nodeKey, ids: on ? users.filter((u) => !banActive(u, now)).map((u) => u.id).sort() : [], over: on ? over || {} : {} };
+  // 防护扩展字段（gate / muOnly / lock）：推送到各节点，节点据此剥离前缀和封锁共享连接
+  if (sec.gate) state.gate = sec.gate;
+  if (sec.rejectSharedUuid) state.muOnly = true;
+  if (sec.lockdown) state.lock = true;
+  return state;
 }
 
 /** 只有超限名单变化时，最快多久下发一次（可用名单 / 开关变化总是立即下发） */

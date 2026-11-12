@@ -10,7 +10,7 @@ import { DATAPLANE_VERSION, CAPS } from './contract.js';
 import { buildLabel } from '../build-info.js';
 import { reportAuthFail, isBlocked } from './guard.js';
 import { bump, recordFail, snapshotStats } from './stats.js';
-import { muCheck, muInfo } from './mu-guard.js';
+import { muCheck, muInfo, lockCheck, muOnlyCheck, gateStrip } from './mu-guard.js';
 
 export const UPSTREAM_VERSION_NUMBER = 20261008222327; // 与上游 EDT_版本号 同格式；/version 接口返回
 
@@ -166,13 +166,25 @@ export async function handleDataPlane(request, env, url, identity, edition = 'fu
   if (!GUARD_OFF(env) && isBlocked(clientIp(request))) { bump('guardBlocked'); return camouflage(request, url, env.URL || 'nginx'); }
   bump(isWs ? 'ws' : 'post');
 
+  // 紧急锁定：state.lock=true 时封锁所有代理连接，给伪装页
+  const now = Date.now();
+  if (await lockCheck(env, now)) { bump('lockBlocked'); return camouflage(request, url, env.URL || 'nginx'); }
+
+  // Gate 前缀剥离：若 state.gate 非空，路径必须以 /<gate>/ 开头，否则拒绝
+  const stripped = await gateStrip(url, env, now);
+  if (stripped === null) { bump('gateMiss'); return camouflage(request, url, env.URL || 'nginx'); }
+  url = stripped;
+
   // 多用户专属链接（路径前缀 /_u<ID>）：校验封禁 / 并行限制，换成该用户的 UUID，去掉前缀再交给上游
-  const mu = await muCheck(request, env, url, clientIp(request));
+  const mu = await muCheck(request, env, url, clientIp(request), now);
   if (mu) {
     if (!mu.ok) { bump('muDeny'); return camouflage(request, url, env.URL || 'nginx'); }
     bump('muOk');
     identity = { ...identity, uuid: mu.uuid };
     url = mu.url;
+  } else {
+    // 无 /_u 前缀（共享 UUID 连接）：state.muOnly=true 时拒绝
+    if (await muOnlyCheck(env, now)) { bump('muOnlyBlocked'); return camouflage(request, url, env.URL || 'nginx'); }
   }
 
   const { tcpDial } = await applyEnv(request, env);

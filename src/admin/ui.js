@@ -362,6 +362,17 @@ function clientMain() {
         ['users.enabled', '开启多用户', 'bool'],
       ] },
     ],
+    security: [
+      { t: "节点通道（Gate）", d: 'Gate 是节点路径最前面的随机字符串前缀，不知道 Gate 的客户端（包括拿到旧订阅链接的攻击者）直接拿到伪装页。建议每次共享 UUID 泄露后立即更换。', f: [
+        ['security.gate', 'Gate 前缀（留空=关闭；只含字母数字，最多 32 位）', 'text'],
+      ] },
+      { t: "订阅访问控制", f: [
+        ['security.rejectSharedUuid', '拒绝共享 UUID 订阅（开启后只有多用户专属链接可用）', 'bool', null, 0, '开启后 /sub?token= 链接失效；只有 /sub?u= 专属链接有效。适合已全面启用多用户时彻底关掉共享订阅'],
+      ] },
+      { t: "紧急锁定", d: '开启后节点数据面立即返回伪装页，所有连接中断。可在遭受 DDoS / 滥用时争取处置时间。', f: [
+        ['security.lockdown', '紧急锁定（节点拒绝所有连接）', 'bool', null, 0, '保存后会立即通过多用户同步通道推送到各节点账号'],
+      ] },
+    ],
     users: [
       { t: "基本设置", f: [
         ['users.defaultLimit', '默认并行客户端数（同时在线的不同 IP；0 = 不限）', 'num'],
@@ -619,6 +630,27 @@ function clientMain() {
   function pgNotify() {
     return sectionHtml('notify').replace('<div class="savebar"', `<section class="card"><h2><i></i>查看日志<span class="sp"></span><button class="btn sm" id="logLoad">刷新</button><button class="btn sm d" id="logClear">清空</button></h2><div id="logOut" class="tw"><p class="desc">点击「刷新」加载</p></div></section><div class="savebar"`);
   }
+  function pgProtect() {
+    const sec = S.settings.security || {};
+    const locked = !!sec.lockdown;
+    const gate = sec.gate || '';
+    const muOnly = !!sec.rejectSharedUuid;
+    const statusHtml = `<section class="card"><h2><i></i>当前防护状态</h2>
+      <div class="kpis" style="margin-bottom:12px">
+        <div class="kpi"><span>节点锁定</span><b class="${locked ? 'pill p-exhausted' : 'pill p-ok'}" style="font-size:14px">${locked ? '🔒 已锁定' : '✓ 正常'}</b></div>
+        <div class="kpi"><span>Gate 前缀</span><b class="mono" style="font-size:14px;word-break:break-all">${h(gate || '未设置')}</b></div>
+        <div class="kpi"><span>共享订阅</span><b class="${muOnly ? 'pill p-exhausted' : 'pill p-ok'}" style="font-size:14px">${muOnly ? '已关闭' : '开放'}</b></div>
+      </div>
+      <div class="row">
+        ${locked
+          ? `<button class="btn p" id="secUnlock">🔓 解除紧急锁定并推送到节点</button>`
+          : `<button class="btn d" id="secLock">🔒 紧急锁定（立即推送到节点）</button>`}
+        <button class="btn" id="secRotate">🔑 生成新 Gate 并推送到节点</button>
+        <button class="btn" id="secSync">↑ 强制同步防护状态</button>
+      </div>
+      <div id="secOut" class="out"></div></section>`;
+    return statusHtml + sectionHtml('security');
+  }
   function pgSystem() {
     return sectionHtml('system').replace('<div class="savebar"', `<section class="card"><h2><i></i>备份与重置</h2><p class="desc">备份包含设置与账号（含凭据），请妥善保存。</p><div class="row">
       <button class="btn" id="exp">导出备份</button><label class="btn">导入备份<input type="file" id="impFile" accept=".json" hidden></label>
@@ -805,9 +837,10 @@ function clientMain() {
     notify: '<path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6M10 19a2 2 0 004 0"/>',
     tools: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>',
     system: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
+    protect: '<path d="M12 3l7 4v5c0 4-3 7-7 8-4-1-7-4-7-8V7z"/><path d="M9 12l2 2 4-4"/>',
   };
   // 页面顺序：日常（概览 / 账号 / 额度）→ 节点与订阅（来源 / 参数 / 订阅规则）→ 运维（通知日志 / 检测工具 / 系统）
-  const PAGES = { overview: ['概览', pgOverview], accounts: ['账号', pgAccounts], users: ['用户', pgUsers], quota: ['额度', pgQuota], sources: ['节点来源', pgSources], node: ['节点参数', pgNode], sub: ['订阅与规则', pgSub], notify: ['通知与日志', pgNotify], tools: ['检测工具', pgNet], system: ['系统', pgSystem] };
+  const PAGES = { overview: ['概览', pgOverview], accounts: ['账号', pgAccounts], users: ['用户', pgUsers], quota: ['额度', pgQuota], sources: ['节点来源', pgSources], node: ['节点参数', pgNode], sub: ['订阅与规则', pgSub], notify: ['通知与日志', pgNotify], protect: ['保护', pgProtect], tools: ['检测工具', pgNet], system: ['系统', pgSystem] };
   const OLD_TABS = { pref: 'sources', net: 'tools', adv: 'system' }; // 旧版记住的页名
 
   function render() {
@@ -1131,6 +1164,32 @@ function clientMain() {
       const scope = $('#rsScope', root).value;
       if (prompt('危险操作，请输入 RESET 确认') !== 'RESET') return;
       await api('reset', 'POST', { scope, confirm: 'RESET' }); toast('已重置'); await reload();
+    });
+    // 保护页
+    const showSecOut = (msg) => { const o = $('#secOut', root); if (o) { o.innerHTML = '<p>' + h(msg) + '</p>'; } };
+    on('secLock', async () => {
+      if (!confirm('确定立即开启紧急锁定？节点将拒绝所有连接。')) return;
+      const r = await api('security/lockdown', 'POST', {});
+      toast('🔒 紧急锁定已开启');
+      showSecOut('锁定已推送：' + (r.push?.pushed || 0) + ' 个账号成功' + (r.push?.errors && Object.keys(r.push.errors).length ? '，' + Object.keys(r.push.errors).length + ' 个失败' : ''));
+      await reload();
+    });
+    on('secUnlock', async () => {
+      const r = await api('security/unlock', 'POST', {});
+      toast('🔓 紧急锁定已解除');
+      showSecOut('解锁已推送：' + (r.push?.pushed || 0) + ' 个账号成功' + (r.push?.errors && Object.keys(r.push.errors).length ? '，' + Object.keys(r.push.errors).length + ' 个失败' : ''));
+      await reload();
+    });
+    on('secRotate', async () => {
+      const r = await api('security/rotate-gate', 'POST', {});
+      toast('🔑 Gate 已更新：' + r.gate);
+      showSecOut('新 Gate：' + r.gate + '；已推送：' + (r.push?.pushed || 0) + ' 个账号成功');
+      await reload();
+    });
+    on('secSync', async () => {
+      const r = await api('security/sync', 'POST', {});
+      toast('↑ 防护状态已同步');
+      showSecOut('同步完成：' + (r.push?.pushed || 0) + ' 个账号成功' + (r.push?.errors && Object.keys(r.push.errors).length ? '，' + Object.keys(r.push.errors).length + ' 个失败' : ''));
     });
   }
 

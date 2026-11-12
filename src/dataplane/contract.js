@@ -33,4 +33,4 @@ export const DATAPLANE_VERSION = 2;
 export const POOL_ROUTE_V = 1;
 
 /** 本节点支持的能力（供后台检测与以后的主站判断） */
-export const CAPS = Object.freeze(['chain-path@1', 'pool-route@1', 'chain-health@1', 'chain-failover@1', 'sstp-keepalive@1', 'chain-race@1', 'guard-cred@1', 'node-stats@1', 'socket-fallback@1', 'pool-seed@1', 'xhttp-mark@1', 'version-cors@1', 'multi-user@1']);
+export const CAPS = Object.freeze(['chain-path@1', 'pool-route@1', 'chain-health@1', 'chain-failover@1', 'sstp-keepalive@1', 'chain-race@1', 'guard-cred@1', 'node-stats@1', 'socket-fallback@1', 'pool-seed@1', 'xhttp-mark@1', 'version-cors@1', 'multi-user@1', 'gate@1', 'mu-only@1', 'lock@1']);
