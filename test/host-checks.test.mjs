@@ -20,7 +20,7 @@ test('applyHostChecks：down/bad 排除；edt / 没有 pool-route 能力的不�
   const pool = ['a', 'b', 'c', 'd', 'e'].map(H);
   const checks = { hosts: {
     a: { s: 'down', at: now }, b: { s: 'bad', at: now }, c: { s: 'edt', at: now },
-    d: { s: 'ok', at: now, caps: ['chain-path@1'] }, e: { s: 'down', at: now - HOST_CHECK_TTL_MS - 1 },
+    d: { s: 'ok', at: now, caps: ['c01@1'] }, e: { s: 'down', at: now - HOST_CHECK_TTL_MS - 1 },
   } };
   const r = applyHostChecks(pool, checks, now);
   assert.deepEqual(r.pool.map((h) => h.host), ['c', 'd', 'e']);
@@ -54,7 +54,7 @@ test('POST /admin/api/hosts/checks 保存结果后，订阅不再分配到坏节
   assert.ok(before.includes('dead.example.com') || before.includes('wrong-uuid.example.com'), '检测前坏节点也会被分配');
   const auth = { Authorization: 'Bearer ' + env.ADMIN, 'Content-Type': 'application/json' };
   const r = await worker.fetch(req('/admin/api/hosts/checks', { method: 'POST', headers: auth, body: JSON.stringify({ results: [
-    { host: 'good.example.com', state: 'ok', caps: ['pool-route@1'] },
+    { host: 'good.example.com', state: 'ok', caps: ['c02@1'] },
     { host: 'dead.example.com', state: 'down' },
     { host: 'WRONG-UUID.example.com', state: 'bad' },
     { host: 'x.example.com', state: 'nonsense' },

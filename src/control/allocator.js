@@ -307,7 +307,7 @@ export const HOST_CHECK_TTL_MS = 3 * 86400e3;
 /**
  * 把后台"检测节点"的结果用到分配上（检测在浏览器里做，不占节点额度；结果经一次 API 写入 KV）。
  *   - 不可达 / UUID 不符（down / bad）：整个排除，客户端不会再拿到连不上的节点；
- *   - 不支持地区路由（edt 原版、旧数据面：Caps 里没有 pool-route@1）：只从"地区节点"的承载池里排除。
+ *   - 不支持地区路由（edt 原版、旧数据面：Caps 里没有 c02@1）：只从"地区节点"的承载池里排除。
  * 排除后池子为空时回退原池（宁可给可能坏的，也不让订阅没有节点）。未检测过、读不到（cors）的域名照常参与。
  * @param {HostInfo[]} pool
  * @param {{hosts?: Record<string, {s:string, caps?:string[], at:number}>}|null} checks
@@ -337,7 +337,7 @@ export function buildPaidRegionPool({ settings, accounts, snapshot, now, mainHos
   return pool.filter((h) => {
     const c = map[h.host];
     if (!fresh(c)) return true;
-    return !(c.s === 'down' || c.s === 'bad' || c.s === 'edt' || (Array.isArray(c.caps) && !c.caps.includes('pool-route@1')));
+    return !(c.s === 'down' || c.s === 'bad' || c.s === 'edt' || (Array.isArray(c.caps) && !c.caps.includes('c02@1')));
   });
 }
 
@@ -353,7 +353,7 @@ export function applyHostChecks(pool, checks, now) {
   if (!kept.length) { kept = (pool || []).slice(); excluded.length = 0; }
   let regionPool = kept.filter((h) => {
     const c = map[h.host];
-    if (fresh(c) && (c.s === 'edt' || (Array.isArray(c.caps) && !c.caps.includes('pool-route@1')))) { noRegion.push(h.host); return false; }
+    if (fresh(c) && (c.s === 'edt' || (Array.isArray(c.caps) && !c.caps.includes('c02@1')))) { noRegion.push(h.host); return false; }
     return true;
   });
   if (!regionPool.length) { regionPool = kept; noRegion.length = 0; }

@@ -32,5 +32,10 @@ export const DATAPLANE_VERSION = 2;
 /** 地区路由路径明文里 `v` 字段本节点最高支持的版本；主站生成的路径使用 POOL_ROUTE_V */
 export const POOL_ROUTE_V = 1;
 
-/** 本节点支持的能力（供后台检测与以后的主站判断） */
-export const CAPS = Object.freeze(['chain-path@1', 'pool-route@1', 'chain-health@1', 'chain-failover@1', 'sstp-keepalive@1', 'chain-race@1', 'guard-cred@1', 'node-stats@1', 'socket-fallback@1', 'pool-seed@1', 'xhttp-mark@1', 'version-cors@1', 'multi-user@1', 'gate@1', 'mu-only@1', 'lock@1']);
+/** 本节点支持的能力（供后台检测与以后的主站判断）
+ * c01=chain-path, c02=pool-route, c03=chain-health, c04=chain-failover,
+ * c05=sstp-keepalive, c06=chain-race, c07=guard-cred, c08=node-stats,
+ * c09=socket-fallback, c10=pool-seed, c11=xhttp-mark, c12=version-cors,
+ * c13=multi-user, c14=gate, c15=mu-only, c16=lock
+ */
+export const CAPS = Object.freeze(['c01@1', 'c02@1', 'c03@1', 'c04@1', 'c05@1', 'c06@1', 'c07@1', 'c08@1', 'c09@1', 'c10@1', 'c11@1', 'c12@1', 'c13@1', 'c14@1', 'c15@1', 'c16@1']);

@@ -227,7 +227,7 @@ export function createAdminApi(deps = {}) {
   /**
    * POST /admin/api/hosts/checks —— 后台"检测节点"在浏览器里跑完后把结果交给主站（一次请求、一次 KV 写）。
    * body: { results: [{ host, state: ok|old|edt|cors|bad|down, caps?: string[] }] }
-   * 分配时：bad/down 不再分配；Caps 没有 pool-route@1（或 edt 原版）的不承载地区条目。结果 3 天后失效。
+   * 分配时：bad/down 不再分配；Caps 没有 c02@1（pool-route，或 edt 原版）的不承载地区条目。结果 3 天后失效。
    */
   async function saveHostChecks(ctx, c) {
     const { body, error } = await readJson(ctx.request);
@@ -246,7 +246,7 @@ export function createAdminApi(deps = {}) {
     }
     await c.store.putJson(KEYS.hostChecks, { at: c.now, hosts }, 300e3);
     const excluded = Object.keys(hosts).filter((h) => ['bad', 'down'].includes(hosts[h].s));
-    const noRegion = Object.keys(hosts).filter((h) => !excluded.includes(h) && (hosts[h].s === 'edt' || (hosts[h].caps && !hosts[h].caps.includes('pool-route@1'))));
+    const noRegion = Object.keys(hosts).filter((h) => !excluded.includes(h) && (hosts[h].s === 'edt' || (hosts[h].caps && !hosts[h].caps.includes('c02@1'))));
     return jsonResponse({ ok: true, saved: Object.keys(hosts).length, excluded, noRegion });
   }
 
